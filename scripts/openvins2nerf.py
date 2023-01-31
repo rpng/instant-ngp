@@ -26,13 +26,18 @@ def write_image_and_pose(image, pose, output_dir, counter, up):
     qvec = np.array([pose.orientation.x, pose.orientation.y,
                     pose.orientation.z, pose.orientation.w])  # x,y,z,w
 
-    R = quat2rot(qvec[0], qvec[1], qvec[2], qvec[3])
-    t = tvec.reshape([3, 1])
+    R_imu2wld = quat2rot(qvec[0], qvec[1], qvec[2], qvec[3])
+    t_imu2wld = tvec.reshape([3, 1])
 
-    # rigid transformation from imu2cam
+    # rigid transformation from cam2imu
+    t_cam2imu = np.array([-0.028, -0.004, -0.007])
+    R_cam2imu = quat2rot(0.001, -0.003, -0.003, 1.000) # rosrun tf tf_echo cam0 imu
 
-    m = np.concatenate([np.concatenate([R, t], 1), bottom], 0)
-    c2w = np.linalg.inv(m)
+    t_cam2wld = np.linalg.inv(R_cam2imu) @ t_imu2wld + t_cam2imu.reshape([3,1])
+    R_cam2wld = R_imu2wld @ R_cam2imu
+
+    c2w = np.concatenate([np.concatenate([R_cam2wld, t_cam2wld], 1), bottom], 0)
+    #c2w = np.linalg.inv(m)
 
     # convert to nerf coordinates
     c2w[0:3, 2] *= -1  # flip the y and z axis
@@ -196,7 +201,7 @@ def sharpness(image):
 
 if __name__ == "__main__":
     # Get the ROS bag file and output directory from the command line
-    bag_file = "/media/saimouli/RPNG_FLASH_4/nerf_ws/src/table_01_gt.bag"
+    bag_file = "/media/saimouli/RPNG_FLASH_4/datasets/ar_table/table_01_gt.bag"
     output_dir_img = "/media/saimouli/RPNG_FLASH_4/datasets/ar_table/table_01_openvins/rgb/"
     start_time = 10.0
     end_time = 20.0
