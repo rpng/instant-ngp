@@ -9,7 +9,7 @@ import math
 from geometry_msgs.msg import PoseWithCovarianceStamped
 import json
 
-
+#NOTE: Values are hardcoded for rpng table dataset
 def write_image_and_pose(image, pose, output_dir, counter, up):
     # Get the timestamp from the pose message
     # timestamp = pose.header.stamp.to_sec()
@@ -99,9 +99,11 @@ def closest_point_2_lines(oa, da, ob, db): # returns point closest to both rays 
 		tb = 0
 	return (oa+ta*da+ob+tb*db) * 0.5, denom
 
-def read_bag(bag_file, output_dir, start_time, end_time, out, OUT_PATH):
+def read_bag(bag_file, output_dir, start_time, end_time, out, OUT_PATH, skip_step):
     first_pose = True
     up = np.zeros(3)
+    frames_counter = 0
+    print("Reading bag, hold tight!")
     # Open the ROS bag
     with rosbag.Bag(bag_file, "r") as bag:
         # Create a bridge for converting image messages
@@ -115,12 +117,18 @@ def read_bag(bag_file, output_dir, start_time, end_time, out, OUT_PATH):
                 start_pose_time = t.to_sec()
                 first_pose = False
             if start_time <= t.to_sec() - start_pose_time <= end_time:
+                print(t.to_sec() - start_pose_time)
                 if topic == "/d455/color/image_raw":
                     # Store the image message in the dictionary
                     image_dict[msg.header.stamp.to_sec()] = msg
                 elif topic == "/ov_msckf/poseimu":
-                    # Store the pose message in the dictionary
-                    pose_dict[msg.header.stamp.to_sec()] = msg.pose.pose
+                    if frames_counter % skip_step:
+                        # Store the pose message in the dictionary
+                        pose_dict[msg.header.stamp.to_sec()] = msg.pose.pose
+                    frames_counter+= 1
+            # break the loop if the time is out of range
+            elif end_time  <= t.to_sec() - start_pose_time:
+                break
 
         print("pose len: ", len(pose_dict))
         print("img len: ", len(image_dict))
@@ -204,9 +212,10 @@ if __name__ == "__main__":
     bag_file = "/media/saimouli/RPNG_FLASH_4/datasets/ar_table/table_01_gt.bag"
     output_dir_img = "/media/saimouli/RPNG_FLASH_4/datasets/ar_table/table_01_openvins/rgb/"
     start_time = 10.0
-    end_time = 20.0
+    end_time = 25.0
     AABB_SCALE = 16
     OUT_PATH = "/media/saimouli/RPNG_FLASH_4/datasets/ar_table/table_01_openvins/transforms.json"
+    skip_step = 5 # choose frames that are % of #
 
     # Camera calibration parameters
     # from camera_info topic
@@ -253,4 +262,4 @@ if __name__ == "__main__":
     }
 
 # Call the read_bag function
-read_bag(bag_file, output_dir_img, start_time, end_time, out, OUT_PATH)
+read_bag(bag_file, output_dir_img, start_time, end_time, out, OUT_PATH, skip_step)
