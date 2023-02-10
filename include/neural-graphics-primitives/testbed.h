@@ -303,6 +303,7 @@ public:
 	void reset_network(bool clear_density_grid = true);
 	void create_empty_nerf_dataset(size_t n_images, int aabb_scale = 1, bool is_hdr = false);
 	void load_nerf(const fs::path& data_path);
+	void load_nerfslam(const fs::path& data_path);
 	void load_nerf_post();
 	void load_mesh(const fs::path& data_path);
 	void set_exposure(float exposure) { m_exposure = exposure; }
@@ -390,6 +391,7 @@ public:
 
 	double calculate_iou(uint32_t n_samples=128*1024*1024, float scale_existing_results_factor=0.0, bool blocking=true, bool force_use_octree = true);
 	void draw_visualizations(ImDrawList* list, const Eigen::Matrix<float, 3, 4>& camera_matrix);
+	void add_training_image(nlohmann::json frame, uint8_t *img, uint16_t *depth=nullptr, uint8_t *alpha=nullptr, uint8_t *mask=nullptr);
 	void train_and_render(bool skip_rendering);
 	fs::path training_data_path() const;
 	void init_window(int resw, int resh, bool hidden = false, bool second_window = false);

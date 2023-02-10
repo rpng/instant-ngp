@@ -1633,6 +1633,10 @@ __global__ void compute_cam_gradient_train_nerf(
 	// background color.
 	uint32_t ray_idx = ray_indices_in[i];
 	uint32_t img = image_idx(ray_idx, n_rays, n_rays_total, n_training_images, cdf_img);
+
+	if (i == 0)
+		printf("[compute_loss_kernel_train_nerf tid:%d] n_training_images: %d img: %d\n", i, n_training_images, img);
+
 	Eigen::Vector2i resolution = metadata[img].resolution;
 
 	const Matrix<float, 3, 4>& xform = training_xforms[img].start;
@@ -2562,6 +2566,115 @@ void Testbed::create_empty_nerf_dataset(size_t n_images, int aabb_scale, bool is
 	m_training_data_available = true;
 }
 
+void Testbed::load_nerfslam(const fs::path& data_path) {
+	if (!data_path.empty()) {
+		std::vector<fs::path> json_paths;
+		if (m_data_path.is_directory()) {
+			for (const auto& path : fs::directory{m_data_path}) {
+				if (path.is_file() && equals_case_insensitive(path.extension(), "json")) {
+					json_paths.emplace_back(path);
+				}
+			}
+		} else if (equals_case_insensitive(m_data_path.extension(), "msgpack")) {
+			load_snapshot(m_data_path.str());
+			set_train(false);
+			return;
+		} else if (equals_case_insensitive(m_data_path.extension(), "json")) {
+			json_paths.emplace_back(m_data_path);
+		} else {
+			throw std::runtime_error{"NeRF data path must either be a json file or a directory containing json files."};
+		}
+
+		m_nerf.training.dataset = ngp::load_nerfslam(json_paths, m_nerf.sharpen);
+	}
+
+	m_nerf.rgb_activation = m_nerf.training.dataset.is_hdr ? ENerfActivation::Exponential : ENerfActivation::Logistic;
+
+	m_nerf.training.n_images_for_training = (int)m_nerf.training.dataset.n_images;
+
+	m_nerf.training.cam_pos_gradient.resize(m_nerf.training.dataset.slam.max_training_keyframes, Vector3f::Zero());
+	m_nerf.training.cam_pos_gradient_gpu.resize_and_copy_from_host(m_nerf.training.cam_pos_gradient);
+
+	m_nerf.training.cam_exposure.resize(m_nerf.training.dataset.slam.max_training_keyframes, AdamOptimizer<Array3f>(1e-3f));
+	m_nerf.training.cam_pos_offset.resize(m_nerf.training.dataset.slam.max_training_keyframes, AdamOptimizer<Vector3f>(1e-4f));
+	m_nerf.training.cam_rot_offset.resize(m_nerf.training.dataset.slam.max_training_keyframes, RotationAdamOptimizer(1e-4f));
+	m_nerf.training.cam_focal_length_offset = AdamOptimizer<Vector2f>(1e-5f);
+
+	m_nerf.training.cam_rot_gradient.resize(m_nerf.training.dataset.slam.max_training_keyframes, Vector3f::Zero());
+	m_nerf.training.cam_rot_gradient_gpu.resize_and_copy_from_host(m_nerf.training.cam_rot_gradient);
+
+	m_nerf.training.cam_exposure_gradient.resize(m_nerf.training.dataset.slam.max_training_keyframes, Array3f::Zero());
+	m_nerf.training.cam_exposure_gpu.resize_and_copy_from_host(m_nerf.training.cam_exposure_gradient);
+	m_nerf.training.cam_exposure_gradient_gpu.resize_and_copy_from_host(m_nerf.training.cam_exposure_gradient);
+
+	m_nerf.training.cam_focal_length_gradient = Vector2f::Zero();
+	m_nerf.training.cam_focal_length_gradient_gpu.resize_and_copy_from_host(&m_nerf.training.cam_focal_length_gradient, 1);
+
+	m_nerf.training.reset_extra_dims(m_rng);
+
+	if (m_nerf.training.dataset.has_rays) {
+		m_nerf.training.near_distance = 0.0f;
+		// m_nerf.training.optimize_exposure = true;
+	}
+
+	// Perturbation of the training cameras -- for debugging the online extrinsics learning code
+	float perturb_amount = 0.0f;
+	if (perturb_amount > 0.f) {
+		for (uint32_t i = 0; i < m_nerf.training.dataset.n_images; ++i) {
+			Vector3f rot = random_val_3d(m_rng) * perturb_amount;
+			float angle = rot.norm();
+			rot /= angle;
+			auto trans = random_val_3d(m_rng);
+			m_nerf.training.dataset.xforms[i].start.block<3,3>(0,0) = AngleAxisf(angle, rot).matrix() * m_nerf.training.dataset.xforms[i].start.block<3,3>(0,0);
+			m_nerf.training.dataset.xforms[i].start.col(3) += trans * perturb_amount;
+			m_nerf.training.dataset.xforms[i].end.block<3,3>(0,0) = AngleAxisf(angle, rot).matrix() * m_nerf.training.dataset.xforms[i].end.block<3,3>(0,0);
+			m_nerf.training.dataset.xforms[i].end.col(3) += trans * perturb_amount;
+		}
+	}
+
+	m_nerf.training.update_transforms();
+
+	if (!m_nerf.training.dataset.metadata.empty()) {
+		m_nerf.render_lens = m_nerf.training.dataset.metadata[0].lens;
+		m_screen_center = Eigen::Vector2f::Constant(1.f) - m_nerf.training.dataset.metadata[0].principal_point;
+	}
+
+	//m_nerf.render_distortion = m_nerf.training.dataset.slam.camera_distortion;
+	//m_screen_center = Eigen::Vector2f::Constant(1.f) - m_nerf.training.dataset.slam.principal_point;
+
+	if (!is_pot(m_nerf.training.dataset.aabb_scale)) {
+		throw std::runtime_error{std::string{"NeRF dataset's `aabb_scale` must be a power of two, but is "} + std::to_string(m_nerf.training.dataset.aabb_scale)};
+	}
+
+	int max_aabb_scale = 1 << (NERF_CASCADES()-1);
+	if (m_nerf.training.dataset.aabb_scale > max_aabb_scale) {
+		throw std::runtime_error{
+			std::string{"NeRF dataset must have `aabb_scale <= "} + std::to_string(max_aabb_scale) +
+			"`, but is " + std::to_string(m_nerf.training.dataset.aabb_scale) +
+			". You can increase this limit by factors of 2 by incrementing `NERF_CASCADES()` and re-compiling."
+		};
+	}
+
+	m_aabb = BoundingBox{Vector3f::Constant(0.5f), Vector3f::Constant(0.5f)};
+	m_aabb.inflate(0.5f * std::min(1 << (NERF_CASCADES()-1), m_nerf.training.dataset.aabb_scale));
+	m_raw_aabb = m_aabb;
+	m_render_aabb = m_aabb;
+	if (!m_nerf.training.dataset.render_aabb.is_empty()) {
+		m_render_aabb = m_nerf.training.dataset.render_aabb.intersection(m_aabb);
+	}
+
+	m_nerf.max_cascade = 0;
+	while ((1 << m_nerf.max_cascade) < m_nerf.training.dataset.aabb_scale) {
+		++m_nerf.max_cascade;
+	}
+
+	// Perform fixed-size stepping in unit-cube scenes (like original NeRF) and exponential
+	// stepping in larger scenes.
+	m_nerf.cone_angle_constant = m_nerf.training.dataset.aabb_scale <= 1 ? 0.0f : (1.0f / 256.0f);
+
+	m_up_dir = m_nerf.training.dataset.up;
+}
+
 void Testbed::load_nerf_post() { // moved the second half of load_nerf here
 	m_nerf.rgb_activation = m_nerf.training.dataset.is_hdr ? ENerfActivation::Exponential : ENerfActivation::Logistic;
 
@@ -2859,13 +2972,16 @@ void Testbed::train_nerf(uint32_t target_batch_size, bool get_loss_scalar, cudaS
 		CUDA_CHECK_THROW(cudaMemsetAsync(m_nerf.training.extra_dims_gradient_gpu.data(), 0, m_nerf.training.extra_dims_gradient_gpu.get_bytes(), stream));
 	}
 
-	if (m_nerf.training.n_steps_since_error_map_update == 0 && !m_nerf.training.dataset.metadata.empty()) {
+	if (m_nerf.training.n_steps_since_error_map_update == 0 || m_nerf.training.n_images_for_training != m_nerf.training.n_images_for_training_prev && !m_nerf.training.dataset.metadata.empty()) {
 		uint32_t n_samples_per_image = (m_nerf.training.n_steps_between_error_map_updates * m_nerf.training.counters_rgb.rays_per_batch) / m_nerf.training.dataset.n_images;
 		Eigen::Vector2i res = m_nerf.training.dataset.metadata[0].resolution;
 		m_nerf.training.error_map.resolution = Vector2i::Constant((int)(std::sqrt(std::sqrt((float)n_samples_per_image)) * 3.5f)).cwiseMin(res);
 		m_nerf.training.error_map.data.resize(m_nerf.training.error_map.resolution.prod() * m_nerf.training.dataset.n_images);
 		CUDA_CHECK_THROW(cudaMemsetAsync(m_nerf.training.error_map.data.data(), 0, m_nerf.training.error_map.data.get_bytes(), stream));
 	}
+
+	//std::cout << "m_nerf.training.n_images_for_training: " << m_nerf.training.n_images_for_training << std::endl;
+	//std::cout << "m_nerf.training.n_images_for_training_prev: " << m_nerf.training.n_images_for_training_prev << std::endl;
 
 	float* envmap_gradient = m_nerf.training.train_envmap ? m_envmap.envmap->gradients() : nullptr;
 	if (envmap_gradient) {

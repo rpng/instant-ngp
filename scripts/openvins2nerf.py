@@ -9,6 +9,24 @@ import math
 from geometry_msgs.msg import PoseWithCovarianceStamped
 import json
 
+class Pose:
+    def __init__(self, x, y, z, x_orient, y_orient, z_orient, w_orient):
+        self.position = Position(x, y, z)
+        self.orientation = Orientation(x_orient, y_orient, z_orient, w_orient)
+
+class Position:
+    def __init__(self, x, y, z):
+        self.x = x
+        self.y = y
+        self.z = z
+
+class Orientation:
+    def __init__(self, x, y, z, w):
+        self.x = x
+        self.y = y
+        self.z = z
+        self.w = w
+
 #NOTE: Values are hardcoded for rpng table dataset
 def write_image_and_pose(image, pose, output_dir, counter, up):
     # Get the timestamp from the pose message
@@ -99,11 +117,41 @@ def closest_point_2_lines(oa, da, ob, db): # returns point closest to both rays 
 		tb = 0
 	return (oa+ta*da+ob+tb*db) * 0.5, denom
 
-def read_bag(bag_file, output_dir, start_time, end_time, out, OUT_PATH, skip_step):
+def read_bag(bag_file, output_dir, start_time, end_time, out, OUT_PATH, kf_time, pose_topic, gt_file = None):
     first_pose = True
+    first_pose_gt = True
+    time_temp_gt = 0
     up = np.zeros(3)
     frames_counter = 0
+    pose_gt_dict = {}
+
+    if gt_file is not None:
+        print("Reading gt file")
+        with open(gt_file) as f:
+            next(f) # skip first line assuming it will always be a comment 
+            for line in f:
+                line = line.strip()
+                data = line.split(" ")
+                timestamp = float(data[0])
+                if (first_pose_gt == True):
+                    time_temp_gt = timestamp
+                    first_pose_gt = False
+
+                if timestamp - time_temp_gt >= kf_time:
+                    x_pos = float(data[1])
+                    y_pos = float(data[2])
+                    z_pos = float(data[3])
+                    x_orient = float(data[4])
+                    y_orient = float(data[5])
+                    z_orient = float(data[6])
+                    w_orient = float(data[7])
+                    pose = Pose(x_pos, y_pos, z_pos, x_orient, y_orient, z_orient, w_orient)
+                    pose_gt_dict[timestamp] = pose
+                    time_temp_gt = timestamp
+
     print("Reading bag, hold tight!")
+    time_temp = 0
+    first_pose_topic = True
     # Open the ROS bag
     with rosbag.Bag(bag_file, "r") as bag:
         # Create a bridge for converting image messages
@@ -111,41 +159,82 @@ def read_bag(bag_file, output_dir, start_time, end_time, out, OUT_PATH, skip_ste
         # Initialize the dictionaries for storing image and pose messages
         image_dict = {}
         pose_dict = {}
+        
         # Read the messages from the bag
         for topic, msg, t in bag.read_messages():
             if first_pose == True:
                 start_pose_time = t.to_sec()
                 first_pose = False
+
+            # check if within the provided time range
             if start_time <= t.to_sec() - start_pose_time <= end_time:
-                print(t.to_sec() - start_pose_time)
+                ##print(t.to_sec() - start_pose_time)
                 if topic == "/d455/color/image_raw":
                     # Store the image message in the dictionary
                     image_dict[msg.header.stamp.to_sec()] = msg
-                elif topic == "/ov_msckf/poseimu":
-                    if frames_counter % skip_step:
+                elif topic == pose_topic:
+                    if first_pose_topic:
+                        time_temp = t.to_sec()
+                        first_pose_topic = False
+                    # storing key frame logic here because poses are higher hz
+                    # select a pose for every 1 sec
+                    #if t.to_sec() - time_temp >= kf_time:
+                        #print(t.to_sec() - time_temp)
+                        #time_temp = t.to_sec()
                         # Store the pose message in the dictionary
                         pose_dict[msg.header.stamp.to_sec()] = msg.pose.pose
-                    frames_counter+= 1
+                        frames_counter+= 1
+                    
+
             # break the loop if the time is out of range
             elif end_time  <= t.to_sec() - start_pose_time:
                 break
+        
+        if gt_file is not None: 
+            pose_dict = pose_gt_dict
 
         print("pose len: ", len(pose_dict))
         print("img len: ", len(image_dict))
         # Iterate over the timestamps
         counter = 0
         
+        # find the nearest timestamp of images based on pose
         for timestamp in sorted(pose_dict.keys()):
             print("pose timestamp: ", timestamp)
             time_key = nearest(image_dict.keys(), timestamp)
-            print("img timestamp: \n", time_key)
+            print("img timestamp: ", time_key)
             counter += 1
-            # if time_key in image_dict:
-            #     counter += 1
-            #     print(counter)
             frame, up = write_image_and_pose(
                 image_dict[time_key], pose_dict[timestamp], output_dir, counter, up)
             out["frames"].append(frame)
+
+        # if gt_file is None:
+        #     # find the nearest timestamp of images based on pose 
+        #     for timestamp in sorted(pose_dict.keys()):
+        #         print("pose timestamp: ", timestamp)
+        #         time_key = nearest(image_dict.keys(), timestamp)
+        #         print("img timestamp: ", time_key)
+        #         counter += 1
+        #         # if time_key in image_dict:
+        #         #     counter += 1
+        #         #     print(counter)
+        #         frame, up = write_image_and_pose(
+        #             image_dict[time_key], pose_dict[timestamp], output_dir, counter, up)
+        #         out["frames"].append(frame)
+        # else:
+        #     # find the nearest timestamp of pose based on images 
+        #     # Use this for GT poses as they are more frequent than images 
+        #     for timestamp in sorted(image_dict.keys()):
+        #         print("img timestamp: ", timestamp)
+        #         time_key = nearest(pose_dict.keys(), timestamp)
+        #         print("pose timestamp: \n", time_key)
+        #         counter += 1
+        #         # if time_key in image_dict:
+        #         #     counter += 1
+        #         #     print(counter)
+        #         frame, up = write_image_and_pose(
+        #             image_dict[timestamp], pose_dict[time_key], output_dir, counter, up)
+        #         out["frames"].append(frame)
 
     print("done parsing the bag")
     nframes = len(out["frames"])
@@ -209,13 +298,14 @@ def sharpness(image):
 
 if __name__ == "__main__":
     # Get the ROS bag file and output directory from the command line
-    bag_file = "/media/saimouli/RPNG_FLASH_4/datasets/ar_table/table_01_gt.bag"
-    output_dir_img = "/media/saimouli/RPNG_FLASH_4/datasets/ar_table/table_01_openvins/rgb/"
+    bag_file = "/media/rpng/RPNG_FLASH_4/datasets/ar_table/table_01_vins_gt.bag"
+    output_dir_img = "/media/rpng/RPNG_FLASH_4/datasets/ar_table/table_01_openvins/rgb/"
+    gt_file = None #"/home/rpng/Documents/sai_ws/ov_nerf_ws/src/ov_nerf/ov_data/rpng_table/table_01.txt"
     start_time = 10.0
-    end_time = 25.0
+    end_time = 30.0
     AABB_SCALE = 16
-    OUT_PATH = "/media/saimouli/RPNG_FLASH_4/datasets/ar_table/table_01_openvins/transforms.json"
-    skip_step = 5 # choose frames that are % of #
+    OUT_PATH = "/media/rpng/RPNG_FLASH_4/datasets/ar_table/table_01_openvins/transforms.json"
+    kf_time = 1 # choose frames every x seconds
 
     # Camera calibration parameters
     # from camera_info topic
@@ -262,4 +352,6 @@ if __name__ == "__main__":
     }
 
 # Call the read_bag function
-read_bag(bag_file, output_dir_img, start_time, end_time, out, OUT_PATH, skip_step)
+pose_topic = "/ov_nerf/poseimu"
+
+read_bag(bag_file, output_dir_img, start_time, end_time, out, OUT_PATH, kf_time, pose_topic, gt_file = gt_file)

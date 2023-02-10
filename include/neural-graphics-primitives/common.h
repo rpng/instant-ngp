@@ -182,6 +182,7 @@ enum class ETestbedMode : int {
 	Image,
 	Volume,
 	None,
+	NerfSlam
 };
 
 ETestbedMode mode_from_scene(const std::string& scene);

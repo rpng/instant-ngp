@@ -149,6 +149,8 @@ ETestbedMode mode_from_scene(const std::string& scene) {
 
 	if (scene_path.is_directory() || equals_case_insensitive(scene_path.extension(), "json")) {
 		return ETestbedMode::Nerf;
+		// [debug] hard code
+		//return ETestbedMode::NerfSlam;
 	} else if (equals_case_insensitive(scene_path.extension(), "obj") || equals_case_insensitive(scene_path.extension(), "stl")) {
 		return ETestbedMode::Sdf;
 	} else if (equals_case_insensitive(scene_path.extension(), "nvdb")) {

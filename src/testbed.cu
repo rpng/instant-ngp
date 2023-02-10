@@ -130,6 +130,7 @@ void Testbed::load_training_data(const fs::path& path) {
 	}
 
 	// Automatically determine the mode from the first scene that's loaded
+	std::cout<< "path.str: "<< path.str() << std::endl;
 	ETestbedMode scene_mode = mode_from_scene(path.str());
 	if (scene_mode == ETestbedMode::None) {
 		throw std::runtime_error{fmt::format("Unknown scene format for path '{}'.", path.str())};
@@ -140,6 +141,7 @@ void Testbed::load_training_data(const fs::path& path) {
 	m_data_path = path;
 
 	switch (m_testbed_mode) {
+		case ETestbedMode::NerfSlam: load_nerfslam(path); break;
 		case ETestbedMode::Nerf:   load_nerf(path); break;
 		case ETestbedMode::Sdf:    load_mesh(path); break;
 		case ETestbedMode::Image:  load_image(path); break;
@@ -457,7 +459,7 @@ void Testbed::set_train(bool mtrain) {
 void Testbed::compute_and_save_marching_cubes_mesh(const char* filename, Vector3i res3d , BoundingBox aabb, float thresh, bool unwrap_it) {
 	Matrix3f render_aabb_to_local = Matrix3f::Identity();
 	if (aabb.is_empty()) {
-		aabb = m_testbed_mode == ETestbedMode::Nerf ? m_render_aabb : m_aabb;
+		aabb = (m_testbed_mode == ETestbedMode::Nerf || m_testbed_mode == ETestbedMode::NerfSlam) ? m_render_aabb : m_aabb;
 		render_aabb_to_local = m_render_aabb_to_local;
 	}
 	marching_cubes(res3d, aabb, render_aabb_to_local, thresh);
@@ -467,7 +469,7 @@ void Testbed::compute_and_save_marching_cubes_mesh(const char* filename, Vector3
 Eigen::Vector3i Testbed::compute_and_save_png_slices(const char* filename, int res, BoundingBox aabb, float thresh, float density_range, bool flip_y_and_z_axes) {
 	Matrix3f render_aabb_to_local = Matrix3f::Identity();
 	if (aabb.is_empty()) {
-		aabb = m_testbed_mode == ETestbedMode::Nerf ? m_render_aabb : m_aabb;
+		aabb = (m_testbed_mode == ETestbedMode::Nerf || m_testbed_mode == ETestbedMode::NerfSlam) ? m_render_aabb : m_aabb;
 		render_aabb_to_local = m_render_aabb_to_local;
 	}
 	if (thresh == std::numeric_limits<float>::max()) {
@@ -734,7 +736,7 @@ void Testbed::imgui() {
 		ImGui::Checkbox("Train network", &m_train_network);
 		ImGui::SameLine();
 		ImGui::Checkbox("Random levels", &m_max_level_rand_training);
-		if (m_testbed_mode == ETestbedMode::Nerf) {
+		if (m_testbed_mode == ETestbedMode::Nerf || m_testbed_mode == ETestbedMode::NerfSlam) {
 			ImGui::Checkbox("Train envmap", &m_nerf.training.train_envmap);
 			ImGui::SameLine();
 			ImGui::Checkbox("Train extrinsics", &m_nerf.training.optimize_extrinsics);
@@ -767,7 +769,7 @@ void Testbed::imgui() {
 
 		if (m_train) {
 			std::vector<std::string> timings;
-			if (m_testbed_mode == ETestbedMode::Nerf) {
+			if (m_testbed_mode == ETestbedMode::Nerf || m_testbed_mode == ETestbedMode::NerfSlam) {
 				timings.emplace_back(fmt::format("Grid: {:.01f}ms", m_training_prep_ms.ema_val()));
 			} else {
 				timings.emplace_back(fmt::format("Datagen: {:.01f}ms", m_training_prep_ms.ema_val()));
@@ -778,14 +780,14 @@ void Testbed::imgui() {
 		} else {
 			ImGui::Text("Training paused");
 		}
-		if (m_testbed_mode == ETestbedMode::Nerf) {
+		if (m_testbed_mode == ETestbedMode::Nerf || m_testbed_mode == ETestbedMode::NerfSlam) {
 			ImGui::Text("Rays/batch: %d, Samples/ray: %.2f, Batch size: %d/%d", m_nerf.training.counters_rgb.rays_per_batch, (float)m_nerf.training.counters_rgb.measured_batch_size / (float)m_nerf.training.counters_rgb.rays_per_batch, m_nerf.training.counters_rgb.measured_batch_size, m_nerf.training.counters_rgb.measured_batch_size_before_compaction);
 		}
 		float elapsed_training = std::chrono::duration<float>(std::chrono::steady_clock::now() - m_training_start_time_point).count();
 		ImGui::Text("Steps: %d, Loss: %0.6f (%0.2f dB), Elapsed: %.1fs", m_training_step, m_loss_scalar.ema_val(), linear_to_db(m_loss_scalar.ema_val()), elapsed_training);
 		ImGui::PlotLines("loss graph", m_loss_graph.data(), std::min(m_loss_graph_samples, m_loss_graph.size()), (m_loss_graph_samples < m_loss_graph.size()) ? 0 : (m_loss_graph_samples % m_loss_graph.size()), 0, FLT_MAX, FLT_MAX, ImVec2(0, 50.f));
 
-		if (m_testbed_mode == ETestbedMode::Nerf && ImGui::TreeNode("NeRF training options")) {
+		if (m_testbed_mode == ETestbedMode::Nerf || m_testbed_mode == ETestbedMode::NerfSlam && ImGui::TreeNode("NeRF training options")) {
 			ImGui::Checkbox("Random bg color", &m_nerf.training.random_bg_color);
 			ImGui::SameLine();
 			ImGui::Checkbox("Snap to pixel centers", &m_nerf.training.snap_to_pixel_centers);
@@ -887,7 +889,7 @@ void Testbed::imgui() {
 			ImGui::SliderInt("Fixed resolution factor", &m_fixed_res_factor, 8, 64);
 		}
 
-		if (m_testbed_mode == ETestbedMode::Nerf && m_nerf.training.dataset.has_light_dirs) {
+		if (m_testbed_mode == ETestbedMode::Nerf || m_testbed_mode == ETestbedMode::NerfSlam && m_nerf.training.dataset.has_light_dirs) {
 			Vector3f light_dir = m_nerf.light_dir.normalized();
 			if (ImGui::TreeNodeEx("Light Dir (Polar)", ImGuiTreeNodeFlags_DefaultOpen)) {
 				float phi = atan2f(m_nerf.light_dir.x(), m_nerf.light_dir.z());
@@ -910,7 +912,7 @@ void Testbed::imgui() {
 				ImGui::TreePop();
 			}
 		}
-		if (m_testbed_mode == ETestbedMode::Nerf && m_nerf.training.dataset.n_extra_learnable_dims) {
+		if (m_testbed_mode == ETestbedMode::Nerf || m_testbed_mode == ETestbedMode::NerfSlam && m_nerf.training.dataset.n_extra_learnable_dims) {
 			accum_reset |= ImGui::SliderInt("training image latent code for inference", (int*)&m_nerf.extra_dim_idx_for_inference, 0, m_nerf.training.dataset.n_images-1);
 		}
 		accum_reset |= ImGui::Combo("Render mode", (int*)&m_render_mode, RenderModeStr);
@@ -988,7 +990,7 @@ void Testbed::imgui() {
 			m_edit_render_aabb = false;
 		}
 
-		if (m_testbed_mode == ETestbedMode::Nerf && ImGui::TreeNode("NeRF rendering options")) {
+		if ((m_testbed_mode == ETestbedMode::Nerf || m_testbed_mode == ETestbedMode::NerfSlam) && ImGui::TreeNode("NeRF rendering options")) {
 			accum_reset |= ImGui::Checkbox("Apply lens distortion", &m_nerf.render_with_lens_distortion);
 
 			if (m_nerf.render_with_lens_distortion) {
@@ -1063,7 +1065,7 @@ void Testbed::imgui() {
 
 		if (ImGui::TreeNode("Debug visualization")) {
 			ImGui::Checkbox("Visualize unit cube", &m_visualize_unit_cube);
-			if (m_testbed_mode == ETestbedMode::Nerf) {
+			if (m_testbed_mode == ETestbedMode::Nerf || m_testbed_mode == ETestbedMode::NerfSlam) {
 				ImGui::SameLine();
 				ImGui::Checkbox("Visualize cameras", &m_nerf.visualize_cameras);
 				accum_reset |= ImGui::SliderInt("Show acceleration", &m_nerf.show_accel, -1, 7);
@@ -1083,7 +1085,7 @@ void Testbed::imgui() {
 				accum_reset = true;
 			}
 
-			if (m_testbed_mode == ETestbedMode::Nerf) {
+			if (m_testbed_mode == ETestbedMode::Nerf || m_testbed_mode == ETestbedMode::NerfSlam) {
 				if (ImGui::Button("First")) {
 					first_training_view();
 				}
@@ -1253,11 +1255,11 @@ void Testbed::imgui() {
 		if (!can_compress) ImGui::EndDisabled();
 	}
 
-	if (m_testbed_mode == ETestbedMode::Nerf || m_testbed_mode == ETestbedMode::Sdf) {
+	if (m_testbed_mode == ETestbedMode::Nerf || m_testbed_mode == ETestbedMode::NerfSlam || m_testbed_mode == ETestbedMode::Sdf) {
 		if (ImGui::CollapsingHeader("Export mesh / volume / slices")) {
 			static bool flip_y_and_z_axes = false;
 			static float density_range = 4.f;
-			BoundingBox aabb = (m_testbed_mode == ETestbedMode::Nerf) ? m_render_aabb : m_aabb;
+			BoundingBox aabb = (m_testbed_mode == ETestbedMode::Nerf || m_testbed_mode == ETestbedMode::NerfSlam) ? m_render_aabb : m_aabb;
 
 			auto res3d = get_marching_cubes_res(m_mesh.res, aabb);
 
@@ -1284,7 +1286,7 @@ void Testbed::imgui() {
 				Testbed::compute_and_save_png_slices(m_data_path.str().c_str(), m_mesh.res, {}, m_mesh.thresh, density_range, flip_y_and_z_axes);
 			}
 
-			if (m_testbed_mode == ETestbedMode::Nerf) {
+			if (m_testbed_mode == ETestbedMode::Nerf || m_testbed_mode == ETestbedMode::NerfSlam) {
 				ImGui::SameLine();
 				if (imgui_colored_button("Save RGBA PNG sequence", 0.2f)) {
 					auto effective_view_dir = flip_y_and_z_axes ? Vector3f{0.0f, 1.0f, 0.0f} : Vector3f{0.0f, 0.0f, 1.0f};
@@ -1462,7 +1464,7 @@ void Testbed::draw_visualizations(ImDrawList* list, const Matrix<float, 3, 4>& c
 		float aspect = (float)m_window_res.x() / (float)m_window_res.y();
 
 		// Visualize NeRF training poses
-		if (m_testbed_mode == ETestbedMode::Nerf) {
+		if (m_testbed_mode == ETestbedMode::Nerf || m_testbed_mode == ETestbedMode::NerfSlam) {
 			if (m_nerf.visualize_cameras) {
 				visualize_nerf_cameras(list, world2proj);
 			}
@@ -1786,7 +1788,7 @@ bool Testbed::begin_frame_and_handle_user_input() {
 		relm = {relm.x / (float)m_window_res.y(), relm.y / (float)m_window_res.y()};
 	}
 
-	if (m_testbed_mode == ETestbedMode::Nerf && (m_render_ground_truth || m_nerf.training.render_error_overlay)) {
+	if ((m_testbed_mode == ETestbedMode::Nerf || m_testbed_mode == ETestbedMode::NerfSlam) && (m_render_ground_truth || m_nerf.training.render_error_overlay)) {
 		// find nearest training view to current camera, and set it
 		int bestimage = find_best_training_view(-1);
 		if (bestimage >= 0) {
@@ -1921,6 +1923,22 @@ void Testbed::draw_gui() {
 	glFinish();
 }
 #endif //NGP_GUI
+
+void Testbed::add_training_image(nlohmann::json frame, uint8_t *img, uint16_t *depth, uint8_t *alpha, uint8_t *mask) {
+	CUDA_CHECK_THROW(cudaDeviceSynchronize());
+
+	m_nerf.training.dataset.add_training_image(frame, img, depth, alpha, mask);
+	m_nerf.training.n_images_for_training = (int)m_nerf.training.dataset.n_images;
+
+	//m_nerf.training.update_metadata();
+	m_nerf.training.dataset.update_metadata();
+	m_nerf.training.update_transforms();
+
+	// update_training_info_from_dataset();
+
+	// wait until gpu dataset is completed
+	CUDA_CHECK_THROW(cudaDeviceSynchronize());
+}
 
 __global__ void to_8bit_color_kernel(
 	Vector2i resolution,
@@ -2680,6 +2698,7 @@ ELossType Testbed::string_to_loss_type(const std::string& str) {
 
 Testbed::NetworkDims Testbed::network_dims() const {
 	switch (m_testbed_mode) {
+		case ETestbedMode::NerfSlam:   return network_dims_nerf(); break;
 		case ETestbedMode::Nerf:   return network_dims_nerf(); break;
 		case ETestbedMode::Sdf:    return network_dims_sdf(); break;
 		case ETestbedMode::Image:  return network_dims_image(); break;
@@ -2725,7 +2744,7 @@ void Testbed::reset_network(bool clear_density_grid) {
 
 	auto dims = network_dims();
 
-	if (m_testbed_mode == ETestbedMode::Nerf) {
+	if (m_testbed_mode == ETestbedMode::Nerf || m_testbed_mode == ETestbedMode::NerfSlam) {
 		m_nerf.training.loss_type = string_to_loss_type(loss_config.value("otype", "L2"));
 
 		// Some of the Nerf-supported losses are not supported by tcnn::Loss,
@@ -2785,7 +2804,7 @@ void Testbed::reset_network(bool clear_density_grid) {
 	m_optimizer.reset(create_optimizer<precision_t>(optimizer_config));
 
 	size_t n_encoding_params = 0;
-	if (m_testbed_mode == ETestbedMode::Nerf) {
+	if (m_testbed_mode == ETestbedMode::Nerf || m_testbed_mode == ETestbedMode::NerfSlam) {
 		m_nerf.training.cam_exposure.resize(m_nerf.training.dataset.n_images, AdamOptimizer<Array3f>(1e-3f, Array3f::Zero()));
 		m_nerf.training.cam_pos_offset.resize(m_nerf.training.dataset.n_images, AdamOptimizer<Vector3f>(1e-4f, Vector3f::Zero()));
 		m_nerf.training.cam_rot_offset.resize(m_nerf.training.dataset.n_images, RotationAdamOptimizer(1e-4f));
@@ -3046,7 +3065,7 @@ void Testbed::train(uint32_t batch_size) {
 		reset_accumulation(false, false);
 	}
 
-	uint32_t n_prep_to_skip = m_testbed_mode == ETestbedMode::Nerf ? tcnn::clamp(m_training_step / 16u, 1u, 16u) : 1u;
+	uint32_t n_prep_to_skip = (m_testbed_mode == ETestbedMode::Nerf || m_testbed_mode == ETestbedMode::NerfSlam)? tcnn::clamp(m_training_step / 16u, 1u, 16u) : 1u;
 	if (m_training_step % n_prep_to_skip == 0) {
 		auto start = std::chrono::steady_clock::now();
 		ScopeGuard timing_guard{[&]() {
@@ -3054,6 +3073,7 @@ void Testbed::train(uint32_t batch_size) {
 		}};
 
 		switch (m_testbed_mode) {
+			case ETestbedMode::NerfSlam: training_prep_nerf(batch_size, m_stream.get()); break;
 			case ETestbedMode::Nerf: training_prep_nerf(batch_size, m_stream.get()); break;
 			case ETestbedMode::Sdf: training_prep_sdf(batch_size, m_stream.get()); break;
 			case ETestbedMode::Image: training_prep_image(batch_size, m_stream.get()); break;
@@ -3082,6 +3102,7 @@ void Testbed::train(uint32_t batch_size) {
 		}};
 
 		switch (m_testbed_mode) {
+			case ETestbedMode::NerfSlam:
 			case ETestbedMode::Nerf:   train_nerf(batch_size, get_loss_scalar, m_stream.get()); break;
 			case ETestbedMode::Sdf:    train_sdf(batch_size, get_loss_scalar, m_stream.get()); break;
 			case ETestbedMode::Image:  train_image(batch_size, get_loss_scalar, m_stream.get()); break;
@@ -3094,6 +3115,10 @@ void Testbed::train(uint32_t batch_size) {
 
 	if (get_loss_scalar) {
 		update_loss_graph();
+	}
+
+	if (m_nerf.training.n_images_for_training_prev != m_nerf.training.n_images_for_training) {
+		m_nerf.training.n_images_for_training_prev = m_nerf.training.n_images_for_training;
 	}
 }
 
@@ -3196,6 +3221,7 @@ void Testbed::render_frame(const Matrix<float, 3, 4>& camera_matrix0, const Matr
 	}
 
 	switch (m_testbed_mode) {
+		case ETestbedMode::NerfSlam:
 		case ETestbedMode::Nerf:
 			if (!m_render_ground_truth || m_ground_truth_alpha < 1.0f) {
 				render_nerf(render_buffer, max_res, focal_length, camera_matrix0, camera_matrix1, nerf_rolling_shutter, screen_center, m_stream.get());
@@ -3305,7 +3331,7 @@ void Testbed::render_frame(const Matrix<float, 3, 4>& camera_matrix0, const Matr
 	if (render_buffer.dlss()) {
 		auto res = render_buffer.in_resolution();
 
-		bool distortion = m_testbed_mode == ETestbedMode::Nerf && m_nerf.render_with_lens_distortion;
+		bool distortion = (m_testbed_mode == ETestbedMode::Nerf || m_testbed_mode == ETestbedMode::NerfSlam) && m_nerf.render_with_lens_distortion;
 
 		const dim3 threads = { 16, 8, 1 };
 		const dim3 blocks = { div_round_up((uint32_t)res.x(), threads.x), div_round_up((uint32_t)res.y(), threads.y), 1 };
@@ -3343,7 +3369,7 @@ void Testbed::render_frame(const Matrix<float, 3, 4>& camera_matrix0, const Matr
 	render_buffer.accumulate(m_exposure, m_stream.get());
 	render_buffer.tonemap(m_exposure, m_background_color, to_srgb ? EColorSpace::SRGB : EColorSpace::Linear, m_stream.get());
 
-	if (m_testbed_mode == ETestbedMode::Nerf) {
+	if (m_testbed_mode == ETestbedMode::Nerf || m_testbed_mode == ETestbedMode::NerfSlam) {
 		// Overlay the ground truth image if requested
 		if (m_render_ground_truth) {
 			auto const& metadata = m_nerf.training.dataset.metadata[m_nerf.training.view];
@@ -3502,7 +3528,7 @@ void Testbed::save_snapshot(const fs::path& path, bool include_optimizer_state, 
 	snapshot["version"] = SNAPSHOT_FORMAT_VERSION;
 	snapshot["mode"] = to_string(m_testbed_mode);
 
-	if (m_testbed_mode == ETestbedMode::Nerf) {
+	if (m_testbed_mode == ETestbedMode::Nerf || m_testbed_mode == ETestbedMode::NerfSlam) {
 		snapshot["density_grid_size"] = NERF_GRIDSIZE();
 
 		GPUMemory<__half> density_grid_fp16(m_nerf.density_grid.size());
@@ -3521,7 +3547,7 @@ void Testbed::save_snapshot(const fs::path& path, bool include_optimizer_state, 
 	to_json(snapshot["render_aabb_to_local"], m_render_aabb_to_local);
 	snapshot["render_aabb"] = m_render_aabb;
 
-	if (m_testbed_mode == ETestbedMode::Nerf) {
+	if (m_testbed_mode == ETestbedMode::Nerf || m_testbed_mode == ETestbedMode::NerfSlam) {
 		snapshot["nerf"]["rgb"]["rays_per_batch"] = m_nerf.training.counters_rgb.rays_per_batch;
 		snapshot["nerf"]["rgb"]["measured_batch_size"] = m_nerf.training.counters_rgb.measured_batch_size;
 		snapshot["nerf"]["rgb"]["measured_batch_size_before_compaction"] = m_nerf.training.counters_rgb.measured_batch_size_before_compaction;
@@ -3556,6 +3582,7 @@ void Testbed::load_snapshot(const fs::path& path) {
 		set_mode(mode_from_string(snapshot["mode"]));
 	} else if (snapshot.contains("nerf")) {
 		// To be able to load old NeRF snapshots that don't specify their mode yet
+		std::cout<< "nerfslam snapshot not defined"<<std::endl;
 		set_mode(ETestbedMode::Nerf);
 	} else if (m_testbed_mode == ETestbedMode::None) {
 		throw std::runtime_error{"Unknown snapshot mode. Snapshot must be regenerated with a new version of instant-ngp."};
@@ -3564,7 +3591,7 @@ void Testbed::load_snapshot(const fs::path& path) {
 	m_aabb = snapshot.value("aabb", m_aabb);
 	m_bounding_radius = snapshot.value("bounding_radius", m_bounding_radius);
 
-	if (m_testbed_mode == ETestbedMode::Nerf) {
+	if (m_testbed_mode == ETestbedMode::Nerf || m_testbed_mode == ETestbedMode::NerfSlam) {
 		if (snapshot["density_grid_size"] != NERF_GRIDSIZE()) {
 			throw std::runtime_error{"Incompatible grid size."};
 		}
@@ -3577,7 +3604,10 @@ void Testbed::load_snapshot(const fs::path& path) {
 		// and render using just that.
 		if (m_data_path.empty() && snapshot["nerf"].contains("dataset")) {
 			m_nerf.training.dataset = snapshot["nerf"]["dataset"];
-			load_nerf(m_data_path);
+			if (m_testbed_mode == ETestbedMode::Nerf)
+				load_nerf(m_data_path);
+			if (m_testbed_mode == ETestbedMode::NerfSlam)
+				load_nerfslam(m_data_path);
 		} else {
 			if (snapshot["nerf"].contains("aabb_scale")) {
 				m_nerf.training.dataset.aabb_scale = snapshot["nerf"]["aabb_scale"];

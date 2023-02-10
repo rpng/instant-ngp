@@ -243,6 +243,9 @@ if __name__ == "__main__":
 								ref_fname = os.path.join(data_dir, p + ".exr")
 
 				ref_image = read_image(ref_fname)
+				if ref_image.shape[2] == 3:
+					alpha = np.full((ref_image.shape[0], ref_image.shape[1]), 1, dtype=np.uint8)
+					ref_image = np.dstack((ref_image, alpha))
 
 				# NeRF blends with background colors in sRGB space, rather than first
 				# transforming to linear space, blending there, and then converting back.
