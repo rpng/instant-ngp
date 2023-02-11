@@ -21,6 +21,7 @@ from common import *
 from scenes import *
 
 from tqdm import tqdm
+import time 
 
 import pyngp as ngp # noqa
 
@@ -315,7 +316,10 @@ if __name__ == "__main__":
 				outname = outname + ".png"
 
 			print(f"rendering {outname}")
+			t1 = time.time()
 			image = testbed.render(args.width or int(ref_transforms["w"]), args.height or int(ref_transforms["h"]), args.screenshot_spp, True)
+			render_time = time.time() - t1
+			print("render time: ", render_time)
 			os.makedirs(os.path.dirname(outname), exist_ok=True)
 			write_image(outname, image)
 	elif args.screenshot_dir:
