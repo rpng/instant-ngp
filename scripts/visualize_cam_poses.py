@@ -6,6 +6,34 @@ import matplotlib.pyplot as plt
 from matplotlib.patches import Patch
 from mpl_toolkits.mplot3d.art3d import Poly3DCollection
 
+def parse_colmap(file_path):
+    with open(file_path, 'r') as f:
+        # Skip 4 lines
+        for i in range(4):
+            f.readline()
+        
+        # Initialize list to store camera poses
+        camera_poses = []
+        
+        # Read data line by line
+        line = f.readline()
+        while line:
+            data = line.strip().split(', ')
+            data = data[0].split(' ')
+            qw, qx, qy, qz, tx, ty, tz = map(float, [data[1], data[2], data[3], data[4], data[5], data[6], data[7]])
+            # Calculate rotation matrix using quaternion
+            R = np.array([[1 - 2 * qy * qy - 2 * qz * qz, 2 * qx * qy - 2 * qz * qw, 2 * qx * qz + 2 * qy * qw],
+                         [2 * qx * qy + 2 * qz * qw, 1 - 2 * qx * qx - 2 * qz * qz, 2 * qy * qz - 2 * qx * qw],
+                         [2 * qx * qz - 2 * qy * qw, 2 * qy * qz + 2 * qx * qw, 1 - 2 * qx * qx - 2 * qy * qy]])
+            t = np.array([tx, ty, tz]).reshape(-1, 1)
+            # Concatenate rotation matrix and translation vector to form 4x4 matrix
+            pose = np.concatenate((np.concatenate((R, t), axis=1), np.array([[0, 0, 0, 1]])))
+            camera_poses.append(pose)
+            
+            line = f.readline()
+        
+        return camera_poses
+    
 # from: https://github.com/demul/extrinsic2pyramid/blob/main/demo1.py
 class CameraParameterLoader:
     def __init__(self):
@@ -42,7 +70,7 @@ class CameraParameterLoader:
 class CameraPoseVisualizer:
     def __init__(self, xlim, ylim, zlim):
         self.fig = plt.figure(figsize=(18, 7))
-        self.ax = self.fig.gca(projection='3d')
+        self.ax = self.fig.add_subplot(projection='3d')
         self.ax.set_aspect("auto")
         self.ax.set_xlim(xlim)
         self.ax.set_ylim(ylim)
@@ -86,22 +114,12 @@ class CameraPoseVisualizer:
 
 if __name__ == '__main__':
     # argument : the minimum/maximum value of x, y, z
-    visualizer = CameraPoseVisualizer([-50, 50], [-50, 50], [0, 50])
+    visualizer = CameraPoseVisualizer([-5, 5], [-5, 5], [0, 5])
 
-    num_poses = 4
-    poses = []
-    for i in range(num_poses):
-        # Random rotation matrix
-        rot_matrix = np.random.rand(3, 3)
-        # Random translation vector
-        trans_vec = np.random.rand(3)
-        # Combine rotation and translation into a 4x4 homogeneous transformation matrix
-        pose = np.identity(4)
-        pose[:3, :3] = rot_matrix
-        pose[:3, 3] = trans_vec
-        poses.append(pose)
+    poses = parse_colmap("/media/saimouli/RPNG_FLASH_4/datasets/nerf_dataset/fern/sparse/0/images.txt")
 
     # argument : extrinsic matrix, color, scaled focal length(z-axis length of frame body of camera
-    visualizer.extrinsic2pyramid(poses[0], 'c', 10)
+    for pose in poses:
+        visualizer.extrinsic2pyramid(pose, 'c', 1)
 
     visualizer.show()
