@@ -44,6 +44,9 @@
 #include <set>
 #include <unordered_set>
 
+#include <opencv2/core/core.hpp>
+#include <opencv2/opencv.hpp>
+
 #ifdef NGP_GUI
 #  include <imgui/imgui.h>
 #  include <imgui/backends/imgui_impl_glfw.h>
@@ -2086,6 +2089,7 @@ void Testbed::prepare_next_camera_path_frame() {
 }
 
 void Testbed::train_and_render(bool skip_rendering) {
+	//tlog::info()<< "train_and_render";
 	if (m_train) {
 		train(m_training_batch_size);
 	}
@@ -3208,7 +3212,143 @@ __global__ void dlss_prep_kernel(
 	}
 }
 
+cv::Mat Testbed::linear_to_srgb(cv::Mat img) {
+    double limit = 0.0031308;
+    cv::Mat img_srgb = cv::Mat::zeros(img.size(), CV_32FC3);
+
+    cv::Mat img_gt_limit = img > limit;
+
+    // Compute sRGB values where img > limit
+	cv::Mat output; 
+	cv::pow(img, 1.0 / 2.4, output);
+    cv::Mat srgb_gt_limit = 1.055 * output - 0.055;
+	img_srgb.setTo(cv::Scalar::all(0), img_gt_limit);
+	srgb_gt_limit.copyTo(img_srgb, img_gt_limit);
+
+    // Compute sRGB values where img <= limit
+    cv::Mat img_le_limit = img <= limit;
+	cv::Mat srgb_le_limit = 12.92 * img;
+	img_srgb.setTo(cv::Scalar::all(0), img_le_limit);
+    srgb_le_limit.copyTo(img_srgb, img_le_limit);
+
+    return img_srgb;
+}
+
+cv::Mat Testbed::render_image_vins(const Eigen::Matrix<float, 3, 4>& cam_matrix, int width, int height, int spp, bool linear, float shutter_fraction) {
+	m_windowless_render_surface.resize({width, height});
+    m_windowless_render_surface.reset_accumulation();
+    float end_time = -1.0; float start_time = -1.0;
+
+    m_fov_axis = 0;
+    //set_fov( 1.5747249934813685 * 180 / M_PI);
+
+    set_nerf_camera_matrix(cam_matrix);
+    
+	if (end_time < 0.f) {
+		end_time = start_time;
+	}
+
+	bool path_animation_enabled = start_time >= 0.f;
+	if (!path_animation_enabled) { // the old code disabled camera smoothing for non-path renders; so we preserve that behaviour
+		m_smoothed_camera = m_camera;
+	}
+
+	if (start_time == 0.f) {
+		set_camera_from_time(start_time);
+		m_smoothed_camera = m_camera;
+	}
+
+	auto start_cam_matrix = m_smoothed_camera;
+	auto end_cam_matrix = m_smoothed_camera;
+
+    for (int i = 0; i < spp; ++i) {
+        float start_alpha = ((float)i)/(float)spp * shutter_fraction;
+        float end_alpha = ((float)i + 1.0f)/(float)spp * shutter_fraction;
+
+        auto sample_start_cam_matrix = start_cam_matrix;
+        auto sample_end_cam_matrix = ngp::log_space_lerp(start_cam_matrix, end_cam_matrix, shutter_fraction);
+
+        if (m_autofocus) {
+            autofocus();
+        }
+
+        render_frame(sample_start_cam_matrix, sample_end_cam_matrix, Eigen::Vector4f::Zero(), m_windowless_render_surface, false);
+    }
+    m_smoothed_camera = end_cam_matrix;
+
+	cv::Mat img(height, width, CV_32FC4);
+	CUDA_CHECK_THROW(cudaMemcpy2DFromArray(img.ptr<float4>(), img.step, m_windowless_render_surface.surface_provider().array(), 0, 0, width * sizeof(float) * 4, height, cudaMemcpyDeviceToHost));
+
+	cv::Mat img_copy = img.clone();
+	//cv::Mat img_exp = img.clone();
+	//std::cout<< "img_copy shape: "<< img_copy.size() << " x "<< img_copy.channels()<< std::endl;
+	
+	
+	cv::Mat bgr_img;
+	cv::cvtColor(img_copy, bgr_img, cv::COLOR_RGBA2BGR);
+	bgr_img.convertTo(bgr_img, CV_8UC3, 255.0);
+
+	//std::cout<< "bgr image shape: "<< bgr_img.size() << std::endl;
+	//cv::imwrite("/media/saimouli/RPNG_FLASH_4/datasets/ar_table/table_01_sample/test.jpg", bgr_img);
+
+	// //trying to divide the alpha channel 
+	// cv::Mat img_srgb;
+	// std::vector<cv::Mat> channels;
+	// cv::split(img_exp, channels);
+
+	// cv::Mat alpha = channels[3];
+
+	// std::vector<cv::Mat> merged_channels = {channels[0], channels[1], channels[2]};
+	// cv::Mat merged_img;
+	// cv::merge(merged_channels, merged_img); // merge the channels back into an image
+
+
+	// cv::Mat channels_rgb = cv::Mat::zeros(channels[0].size(), CV_32FC3);
+	// for (int i = 0; i < channels[0].rows; ++i) {
+	// 	for (int j = 0; j < channels[0].cols; ++j) {
+	// 		float a = alpha.at<float>(i, j);
+	// 		if (a != 0) {
+	// 			channels_rgb.at<cv::Vec3f>(i, j)[0] = channels[0].at<cv::Vec3f>(i, j)[0]/a ;
+	// 			channels_rgb.at<cv::Vec3f>(i, j)[1] = channels[1].at<cv::Vec3f>(i, j)[1]/a ;
+	// 			channels_rgb.at<cv::Vec3f>(i, j)[2] = channels[2].at<cv::Vec3f>(i, j)[2]/a ;
+	// 		}
+	// 	}
+	// }
+
+	// cv::Mat srgb_lin = linear_to_srgb(merged_img);
+	// cv::Mat bgr_img_test;
+	// cv::cvtColor(srgb_lin, bgr_img_test, cv::COLOR_RGB2BGR);
+	// bgr_img_test.convertTo(bgr_img_test, CV_8UC3, 255.0);
+	// std::cout<< "bgr_img_test image shape: "<< bgr_img_test.size() << std::endl;
+	// cv::imwrite("/media/saimouli/RPNG_FLASH_4/datasets/ar_table/table_01_sample/test_alpha_cv.jpg", bgr_img_test);
+
+	// // GPU render 
+	// Vector2i res = m_windowless_render_surface.out_resolution();
+	// const dim3 threads = { 16, 8, 1 };
+	// const dim3 blocks = { div_round_up((uint32_t)res.x(), threads.x), div_round_up((uint32_t)res.y(), threads.y), 1 };
+	
+	// GPUMemory<uint8_t> image_data(res.prod() * 3);
+	// to_8bit_color_kernel<<<blocks, threads>>>(
+	// 	res,
+	// 	EColorSpace::SRGB, // the GUI always renders in SRGB
+	// 	m_windowless_render_surface.surface(),
+	// 	image_data.data()
+	// );
+		
+	// std::vector<uint8_t> cpu_image_data(image_data.size());
+	// CUDA_CHECK_THROW(cudaMemcpy(cpu_image_data.data(), image_data.data(), image_data.bytes(), cudaMemcpyDeviceToHost));
+	// write_stbi("/media/saimouli/RPNG_FLASH_4/datasets/ar_table/table_01_sample/alpha_test.jpg", res.x(), res.y(), 3, cpu_image_data.data(), 100);
+
+	// m_render_futures.emplace_back(m_thread_pool.enqueue_task([image_data=std::move(image_data), frame_idx=m_camera_path.render_frame_idx++, res, "/media/saimouli/RPNG_FLASH_4/datasets/ar_table/table_01_sample/"] {
+	// 	std::vector<uint8_t> cpu_image_data(image_data.size());
+	// 	CUDA_CHECK_THROW(cudaMemcpy(cpu_image_data.data(), image_data.data(), image_data.bytes(), cudaMemcpyDeviceToHost));
+	// 	write_stbi("/media/saimouli/RPNG_FLASH_4/datasets/ar_table/table_01_sample/alpha_test.jpg", res.x(), res.y(), 3, cpu_image_data.data(), 100);
+	// }));
+	return bgr_img;
+}
+
 void Testbed::render_frame(const Matrix<float, 3, 4>& camera_matrix0, const Matrix<float, 3, 4>& camera_matrix1, const Vector4f& nerf_rolling_shutter, CudaRenderBuffer& render_buffer, bool to_srgb) {
+	tlog::info()<< "render_frame_comment";
 	Vector2i max_res = m_window_res.cwiseMax(render_buffer.in_resolution());
 
 	render_buffer.clear_frame(m_stream.get());
