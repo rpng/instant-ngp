@@ -292,7 +292,7 @@ public:
 	void render_nerf(CudaRenderBuffer& render_buffer, const Eigen::Vector2i& max_res, const Eigen::Vector2f& focal_length, const Eigen::Matrix<float, 3, 4>& camera_matrix0, const Eigen::Matrix<float, 3, 4>& camera_matrix1, const Eigen::Vector4f& rolling_shutter, const Eigen::Vector2f& screen_center, cudaStream_t stream);
 	void render_image(CudaRenderBuffer& render_buffer, cudaStream_t stream);
 	cv::Mat linear_to_srgb(cv::Mat img);
-	cv::Mat render_image_vins(const Eigen::Matrix<float, 3, 4>& cam_matrix, int width, int height, int spp, bool linear, float shutter_fraction);
+	cv::Mat render_image_vins(Eigen::Matrix<float, 3, 4> cam_matrix, int width, int height, int spp, bool linear, float shutter_fraction);
 	void render_frame(const Eigen::Matrix<float, 3, 4>& camera_matrix0, const Eigen::Matrix<float, 3, 4>& camera_matrix1, const Eigen::Vector4f& nerf_rolling_shutter, CudaRenderBuffer& render_buffer, bool to_srgb = true) ;
 	void visualize_nerf_cameras(ImDrawList* list, const Eigen::Matrix<float, 4, 4>& world2proj);
 	fs::path find_network_config(const fs::path& network_config_path);

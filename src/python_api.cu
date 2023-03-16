@@ -126,6 +126,7 @@ pybind11::dict Testbed::compute_marching_cubes_mesh(Eigen::Vector3i res3d, Bound
 }
 
 py::array_t<float> Testbed::render_to_cpu(int width, int height, int spp, bool linear, float start_time, float end_time, float fps, float shutter_fraction) {
+	//tlog::info()<< "render_to_cpu "<< " width: "<< width<< " height: "<< height;
 	m_windowless_render_surface.resize({width, height});
 	m_windowless_render_surface.reset_accumulation();
 

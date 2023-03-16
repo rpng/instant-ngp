@@ -3234,7 +3234,7 @@ cv::Mat Testbed::linear_to_srgb(cv::Mat img) {
     return img_srgb;
 }
 
-cv::Mat Testbed::render_image_vins(const Eigen::Matrix<float, 3, 4>& cam_matrix, int width, int height, int spp, bool linear, float shutter_fraction) {
+cv::Mat Testbed::render_image_vins(Eigen::Matrix<float, 3, 4> cam_matrix, int width, int height, int spp, bool linear, float shutter_fraction) {
 	m_windowless_render_surface.resize({width, height});
     m_windowless_render_surface.reset_accumulation();
     float end_time = -1.0; float start_time = -1.0;
@@ -3348,7 +3348,7 @@ cv::Mat Testbed::render_image_vins(const Eigen::Matrix<float, 3, 4>& cam_matrix,
 }
 
 void Testbed::render_frame(const Matrix<float, 3, 4>& camera_matrix0, const Matrix<float, 3, 4>& camera_matrix1, const Vector4f& nerf_rolling_shutter, CudaRenderBuffer& render_buffer, bool to_srgb) {
-	tlog::info()<< "render_frame_comment";
+	//tlog::info()<< "render_frame_comment";
 	Vector2i max_res = m_window_res.cwiseMax(render_buffer.in_resolution());
 
 	render_buffer.clear_frame(m_stream.get());
