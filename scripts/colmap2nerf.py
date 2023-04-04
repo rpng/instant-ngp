@@ -20,9 +20,13 @@ import math
 import cv2
 import os
 import shutil
+import matplotlib.pyplot as plt
 
 ROOT_DIR = os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
 SCRIPTS_FOLDER = os.path.join(ROOT_DIR, "scripts")
+
+cam2wld_traj = []
+wld2cam_traj = []
 
 def parse_args():
 	parser = argparse.ArgumentParser(description="Convert a text colmap export to nerf format transforms.json; optionally convert video to images, and optionally run colmap in the first place.")
@@ -54,6 +58,7 @@ def do_system(arg):
 		print("FATAL: command failed")
 		sys.exit(err)
 
+    
 def run_ffmpeg(args):
 	ffmpeg_binary = "ffmpeg"
 
@@ -147,8 +152,8 @@ def sharpness(imagePath):
 	gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
 	fm = variance_of_laplacian(gray)
 	return fm
-
-def qvec2rotmat(qvec):
+#hamiltonian quaternion convention
+def qvec2rotmat(qvec): # TODO: double check this	
 	return np.array([
 		[
 			1 - 2 * qvec[2]**2 - 2 * qvec[3]**2,
@@ -190,6 +195,24 @@ def closest_point_2_lines(oa, da, ob, db): # returns point closest to both rays 
 		tb = 0
 	return (oa+ta*da+ob+tb*db) * 0.5, denom
 
+def plot_trajectory():
+    fig, (ax2, ax3) = plt.subplots(2, 1, figsize=(8, 12))
+
+    ax2.plot(np.array(cam2wld_traj)[:, 0], np.array(cam2wld_traj)[:, 1], label='cam2wld', linestyle=':')
+    ax2.plot(np.array(wld2cam_traj)[:, 0], np.array(wld2cam_traj)[:, 1], label='wld2cam', linestyle='--')
+    ax2.set_xlabel('X')
+    ax2.set_ylabel('Y')
+    ax2.legend()
+
+    # ax3.plot(colmap_traj[:, 2], label='Colmap')
+    # ax3.plot(vicon_traj[:, 2], label='Vicon')
+    # ax3.plot(transformed_vicon2colmap[:, 2], linestyle='--', color='red', label='vicon2colmap')
+    # ax3.set_xlabel('Frame number')
+    # ax3.set_ylabel('Height')
+    # ax3.legend()
+
+    plt.show()
+    
 if __name__ == "__main__":
 	args = parse_args()
 	if args.video_in != "":
@@ -320,15 +343,44 @@ if __name__ == "__main__":
 				image_id = int(elems[0])
 				qvec = np.array(tuple(map(float, elems[1:5])))
 				tvec = np.array(tuple(map(float, elems[5:8])))
-				R = qvec2rotmat(-qvec)
-				t = tvec.reshape([3,1])
-				m = np.concatenate([np.concatenate([R, t], 1), bottom], 0)
-				c2w = np.linalg.inv(m)
+				R = qvec2rotmat(qvec) #TODO: play with this transform (wld2cam) 
+				t = tvec.reshape([3,1]) #->GinC
+				m = np.concatenate([np.concatenate([R, t], 1), bottom], 0) #R_WtoC
+				# wld2cam_traj.append(m[:3,3].reshape([3,]).tolist())
+				c2w = np.linalg.inv(m) #R_CtoW, p_WinC
+				# in our language world to cam
+				
+			# p_GinC // cam2wld? 
+			# RGtoC // wld2cam
+
+				# R_GtoC = qvec2rotmat(qvec) # hamiltonian
+				# p_GinC = tvec.reshape([3,1])
+				# m = np.concatenate([np.concatenate([R_GtoC, p_CinG], 1), bottom], 0) #cam2wld
+				# wld2cam_traj.append(p_CinG.reshape([3,]).tolist())
+
+				#c2w = np.linalg.inv(m)
+				#cam2wld_traj.append(c2w[:3,3].reshape([3,]).tolist())
+				#print("c2w before nerf: ", c2w)
+
 				if not args.keep_colmap_coords:
+					#test = c2w
 					c2w[0:3,2] *= -1 # flip the y and z axis
+					#print("c2w flipz: ", c2w)
 					c2w[0:3,1] *= -1
+					#print("c2w flipy: ", c2w)
 					c2w = c2w[[1,0,2,3],:]
 					c2w[2,:] *= -1 # flip whole world upside down
+					#print("c2w after nerf: ", c2w)
+					
+					# # swap row 1 and 2
+					# P = np.array([[0, 1, 0, 0],
+					# 	[-1, 0, 0, 0],
+					# 	[0, 0, 1, 0],
+					# 	[0, 0, 0, 1]])
+					# test_ = P @ test
+					# print("test: ", test)
+					cam2wld_traj.append(c2w[:3,3].reshape([3,]).tolist())
+					#print("cam2wld_traj: ", c2w[:3,3].reshape([3,]).tolist())
 
 					up += c2w[0:3,1]
 
@@ -346,6 +398,8 @@ if __name__ == "__main__":
 
 		for f in out["frames"]:
 			f["transform_matrix"] = np.matmul(f["transform_matrix"], flip_mat) # flip cameras (it just works)
+			#print(f["transform_matrix"])
+			cam2wld_traj.append(f["transform_matrix"][:3,3].reshape([3,]).tolist())
 	else:
 		# don't keep colmap coords - reorient the scene to be easier to work with
 
@@ -384,6 +438,7 @@ if __name__ == "__main__":
 		for f in out["frames"]:
 			f["transform_matrix"][0:3,3] *= 4.0 / avglen # scale to "nerf sized"
 
+	#plot_trajectory()
 	for f in out["frames"]:
 		f["transform_matrix"] = f["transform_matrix"].tolist()
 	print(nframes,"frames")

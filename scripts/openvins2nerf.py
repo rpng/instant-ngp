@@ -13,6 +13,8 @@ from scipy.spatial.transform import Slerp
 from scipy.interpolate import CubicSpline
 import matplotlib.pyplot as plt
 
+cam2wld_traj = []
+wld2cam_traj = []
 
 class Pose:
     def __init__(self, x, y, z, x_orient, y_orient, z_orient, w_orient):
@@ -36,12 +38,59 @@ def ros_to_pose_matrix(pose):
     tvec = np.array([pose.position.x, pose.position.y, pose.position.z])
     qvec = np.array([pose.orientation.x, pose.orientation.y,
                     pose.orientation.z, pose.orientation.w]) 
-    R_imu2wld = quat2rot(qvec[0], qvec[1], qvec[2], qvec[3])
-    t_imu2wld = tvec.reshape([3, 1])
-    T_imu2wld = np.hstack((R_imu2wld, t_imu2wld))
-    return T_imu2wld
+    #R_GtoI = jpl_quat_to_rot_mat(qvec[0], qvec[1], qvec[2], qvec[3]) #x,y,z,w
+    R_ItoG = quat2rot(qvec[0], qvec[1], qvec[2], qvec[3])
+    p_IinG = tvec.reshape([3, 1])
+    T_wld2imu = np.hstack((R_ItoG, p_IinG))
+    return T_wld2imu
 
+def plot_trajectory():
+    fig, (ax2, ax3) = plt.subplots(2, 1, figsize=(8, 12))
+    
+    ax2.plot(np.array(cam2wld_traj)[:, 0], np.array(cam2wld_traj)[:, 1], label='cam2wld', linestyle=':')
+    ax2.plot(np.array(wld2cam_traj)[:, 0], np.array(wld2cam_traj)[:, 1], label='wld2cam', linestyle='--')
+    ax2.set_xlabel('X')
+    ax2.set_ylabel('Y')
+    ax2.legend()
 
+    ax3.plot(np.array(cam2wld_traj)[:, 2], label='cam2wld')
+    ax3.plot(np.array(wld2cam_traj)[:, 2], label='wld2cam')
+    ax3.set_xlabel('m')
+    ax3.set_ylabel('z(m)')
+    ax3.legend()
+
+    plt.show()
+
+def compute_poses_to_plot(pose):
+    R_ItoG = pose[:3, :3]
+    p_IinG = pose[:3, 3].reshape([3, 1]) #in reality it is p_IinG
+
+    # rigid transformation from cam2imu
+    T_CtoI = np.array([[0.9999654398038452, 0.007342326779113337, -0.003899927610975742, -0.027534314618518095],
+              [-0.0073452195116216765, 0.9999727585590525, -0.0007279355223411334, -0.0030587146933711722],
+              [0.0038944766308488753, 0.0007565561891287445, 0.9999921303062861, -0.023605118842939803],
+              [0.0, 0.0, 0.0, 1.0]])
+    
+    p_IinC = T_CtoI[:3, 3] #in reality it is p_IinC
+    R_ItoC = T_CtoI[:3, :3] #in reality it is R_ItoC
+
+    #adjustments
+    p_GinI = -R_ItoG.transpose() @ p_IinG
+    R_CtoI = R_ItoC.transpose()
+
+    # transform for cam2wld
+    p_GinC = R_ItoC @ p_GinI + p_IinC.reshape([3,1])
+    R_CtoG = R_ItoG @ R_CtoI
+
+    # cam2wld
+    p_CinG = -R_CtoG @ p_GinC
+
+    cam2wld_traj.append(p_CinG.reshape([3,]).tolist())
+    wld2cam_traj.append(p_GinC.reshape([3,]).tolist())
+
+from pyquaternion import Quaternion
+
+# qw_str, qx_str, qy_str, qz_str, tx_str, ty_str, tz_str, camera_id_str, img_name;
 #NOTE: Values are hardcoded for rpng table dataset
 def write_image_and_pose(image, pose, output_dir, counter, up):
     # Get the timestamp from the pose message
@@ -58,35 +107,47 @@ def write_image_and_pose(image, pose, output_dir, counter, up):
     #tvec = np.array([pose.position.x, pose.position.y, pose.position.z])
     #qvec = np.array([pose.orientation.x, pose.orientation.y,
     #                pose.orientation.z, pose.orientation.w])  # x,y,z,w
-
-    #R_imu2wld = quat2rot(qvec[0], qvec[1], qvec[2], qvec[3])
-    #t_imu2wld = tvec.reshape([3, 1])
-    R_imu2wld = pose[:3, :3]
-    t_imu2wld = pose[:3, 3].reshape([3,1])
-
+    R_ItoG = np.array(pose[:3, :3])
+    p_IinG = pose[:3, 3].reshape([3, 1]) #in reality it is p_IinG 
+ 
     # rigid transformation from cam2imu
-    M_cam2imu = np.array([[0.9999654398038452, 0.007342326779113337, -0.003899927610975742, -0.027534314618518095],
+    T_CtoI = np.array([[0.9999654398038452, 0.007342326779113337, -0.003899927610975742, -0.027534314618518095],
               [-0.0073452195116216765, 0.9999727585590525, -0.0007279355223411334, -0.0030587146933711722],
               [0.0038944766308488753, 0.0007565561891287445, 0.9999921303062861, -0.023605118842939803],
               [0.0, 0.0, 0.0, 1.0]])
     
-    t_cam2imu = M_cam2imu[:3, 3]
-    R_cam2imu = M_cam2imu[:3, :3]
+    p_IinC = T_CtoI[:3, 3] #in reality it is p_IinC
+    R_ItoC = T_CtoI[:3, :3] #in reality it is R_ItoC
 
-    #t_cam2imu = np.array([-0.028, -0.004, -0.007]) # 
-    #R_cam2imu = quat2rot(0.001, -0.003, -0.003, 1.000) # rosrun tf tf_echo cam0 imu
+    #adjustments
+    p_GinI = -R_ItoG.transpose() @ p_IinG
+    R_CtoI = R_ItoC.transpose()
 
-    t_cam2wld = np.linalg.inv(R_cam2imu) @ t_imu2wld + t_cam2imu.reshape([3,1])
-    R_cam2wld = R_imu2wld @ R_cam2imu
+    # transform for cam2wld
+    p_GinC = R_ItoC @ p_GinI + p_IinC.reshape([3,1])
+    R_CtoG = R_ItoG @ R_CtoI
+    
+    p_CinG = -R_CtoG @ p_GinC
 
-    c2w = np.concatenate([np.concatenate([R_cam2wld, t_cam2wld], 1), bottom], 0)
-    #c2w = np.linalg.inv(m)
+    #R_GtoN = np.array([[0, -1, 0], [-1, 0, 0], [0, 0, -1]])
+    #R_CtoN = R_GtoN @ R_CtoG
+    c2w = np.concatenate([np.concatenate([R_CtoG, p_CinG], 1), bottom], 0)
+    #w2c = np.concatenate([np.concatenate([R_CtoG.transpose(), -R_CtoG.transpose() @ p_GinC], 1), bottom], 0) #wld2cam
+    
+    # print("t_cam2wld: ", p_GinC)
+    # print("R_cam2wld: ", R_CtoG)
+    #print("w2c: ", w2c)
 
-    # convert to nerf coordinates
-    c2w[0:3, 2] *= -1  # flip the y and z axis
-    c2w[0:3, 1] *= -1
-    c2w = c2w[[1, 0, 2, 3], :]
-    c2w[2, :] *= -1  # flip whole world upside down
+    # print("w2c rot: ", w2c)
+    #w2c = Rx(np.pi) @ w2c
+    # # convert to nerf coordinates
+    # c2w[0:3, 2] *= -1  # flip the y and z axis
+    # c2w[0:3, 1] *= -1
+    # c2w = c2w[[1, 0, 2, 3], :]
+    # c2w[2, :] *= -1  # flip whole world upside down
+    # print("c2w: ", c2w)
+
+    # rotate the camera to face the table
     up += c2w[0:3, 1]
 
     frame = {"file_path": image_file, "sharpness": sharp_img, "transform_matrix": c2w}
@@ -99,7 +160,18 @@ def write_image_and_pose(image, pose, output_dir, counter, up):
 def nearest(items, pivot):
     return min(items, key=lambda x: abs(x - pivot))
 
+# see eq. 92 from quat tech report
 
+def jpl_quat_to_rot_mat(x, y, z, w):
+    rot_mat = np.array([
+        [1 - 2*y**2 - 2*z**2, 2*(x*y + w*z), 2*(x*z - w*y)],
+        [2*(x*y - w*z), 1 - 2*x**2 - 2*z**2, 2*(y*z + w*x)],
+        [2*(x*z + w*y), 2*(y*z - w*x), 1 - 2*x**2 - 2*y**2]
+    ])
+    
+    return rot_mat
+
+# hamiltonian matrix
 def quat2rot(x, y, z, w):
     rot_mat = np.zeros((3, 3))
     rot_mat[0, 0] = 1 - 2*y**2 - 2*z**2
@@ -357,16 +429,18 @@ def read_bag(bag_file, output_dir, start_time, end_time, out, OUT_PATH, kf_time,
                                 desired_pose_at_timestamp[i] = func(timestamp)
                             translation = desired_pose_at_timestamp[:3]
                             quaternion = desired_pose_at_timestamp[3:]
-                            rot = quat2rot(quaternion[0], quaternion[1], quaternion[2], quaternion[3])
+                            rot = jpl_quat_to_rot_mat(quaternion[0], quaternion[1], quaternion[2], quaternion[3])
+                            #rot = quat2rot(quaternion[0], quaternion[1], quaternion[2], quaternion[3])
                             desired_pose_matrix = np.concatenate((rot, np.expand_dims(translation, axis=1)), axis=1)
                             frame, up = write_image_and_pose(image_dict[timestamp], desired_pose_matrix, output_dir, counter, up)
-                        print("Cubic interpolation nearest pose:{} inter pose:{}".format(ros_to_pose_matrix(pose_dict[curr_pose_time]), desired_pose_matrix))
+                        print("Cubic interpolation nearest pose:{} inter pose:{}\n".format(ros_to_pose_matrix(pose_dict[curr_pose_time]), desired_pose_matrix))
                         
                     else:
                         # Do not interpolate 
+                        print("not interpolating")
                         curr_pose = ros_to_pose_matrix(pose_dict[curr_pose_time])
                         frame, up = write_image_and_pose(image_dict[timestamp], curr_pose, output_dir, counter, up)                        
-                
+                        compute_poses_to_plot(curr_pose)
                     out["frames"].append(frame)
                 else:
                     print("Skipping blurry img")
@@ -401,19 +475,20 @@ def read_bag(bag_file, output_dir, start_time, end_time, out, OUT_PATH, kf_time,
         #             image_dict[timestamp], pose_dict[time_key], output_dir, counter, up)
         #         out["frames"].append(frame)
 
+    plot_trajectory()
     print("done parsing the bag")
     nframes = len(out["frames"])
     up = up / np.linalg.norm(up)
     print("up vector was", up)
-    R = rotmat(up, [0, 0, 1])  # rotate up vector to [0,0,1]
-    R = np.pad(R, [0, 1])
-    R[-1, -1] = 1
+    # R = rotmat(up, [0, 0, 1])  # rotate up vector to [0,0,1]
+    # R = np.pad(R, [0, 1])
+    # R[-1, -1] = 1
 
-    for f in out["frames"]:
-        f["transform_matrix"] = np.matmul(R, f["transform_matrix"])  # rotate up to be the z axis
+    # for f in out["frames"]:
+    #     f["transform_matrix"] = np.matmul(R, f["transform_matrix"])  # rotate up to be the z axis
 
     # # find a central point they are all looking at
-    compute_center = True
+    compute_center = False
     if compute_center == True:
         print("computing center of attention...")
         totw = 0.0
@@ -446,7 +521,7 @@ def read_bag(bag_file, output_dir, start_time, end_time, out, OUT_PATH, kf_time,
         if not isinstance(f["transform_matrix"], list):
             f["transform_matrix"] = f["transform_matrix"].tolist()
 
-    print(nframes, "frames")
+    #print(nframes, "frames")
     print(f"writing {OUT_PATH}")
     print("Saving JSON")
     with open(OUT_PATH, "w") as outfile:
@@ -465,7 +540,7 @@ def sharpness(image):
 
 if __name__ == "__main__":
     # Get the ROS bag file and output directory from the command line
-    bag_file = "/media/saimouli/RPNG_FLASH_4/datasets/ar_table/bags/table_01.bag"
+    bag_file = "/media/saimouli/RPNG_FLASH_4/datasets/ar_table/bags/table_01.bag" #/media/saimouli/RPNG_FLASH_4/datasets/ar_table/bags/table_01.bag"
     output_dir_img = "/media/saimouli/RPNG_FLASH_4/datasets/ar_table/table_01_openvins_gt/rgb/"
     gt_file = "/home/saimouli/Desktop/catkin_ws/src/ov_nerf/ov_data/rpng_table/table_01.txt"
     start_time = 5.0
@@ -521,4 +596,4 @@ if __name__ == "__main__":
 # Call the read_bag function
 pose_topic = "/ov_nerf/poseimu"
 
-read_bag(bag_file, output_dir_img, start_time, end_time, out, OUT_PATH, kf_time, pose_topic, interpolate_linear_poses = False, interpolate_cubic_poses_flag = True, gt_file = gt_file)
+read_bag(bag_file, output_dir_img, start_time, end_time, out, OUT_PATH, kf_time, pose_topic, interpolate_linear_poses = False, interpolate_cubic_poses_flag = False, gt_file = gt_file)

@@ -3,27 +3,6 @@ import numpy as np
 from scipy.spatial.transform import Rotation as R
 import matplotlib.pyplot as plt
 from mpl_toolkits.mplot3d import Axes3D
-import open3d as o3d
-
-def align_sim3(source_traj, target_traj):
-    # Convert trajectories to Open3D point cloud format
-    source_pcd = o3d.geometry.PointCloud()
-    source_pcd.points = o3d.utility.Vector3dVector(source_traj[:,:3])
-    source_pcd.normals = o3d.utility.Vector3dVector(source_traj[:,3:7])
-    target_pcd = o3d.geometry.PointCloud()
-    target_pcd.points = o3d.utility.Vector3dVector(target_traj[:,:3])
-    target_pcd.normals = o3d.utility.Vector3dVector(target_traj[:,3:7])
-
-    # Compute Sim3 transformation
-    reg = o3d.registration.registration_sim3_kpts(source_pcd, target_pcd, 0.1)
-    sim3 = reg.transformation
-
-    # Apply Sim3 transformation to source trajectory
-    source_traj_sim3 = np.zeros_like(source_traj)
-    source_traj_sim3[:,:3] = (sim3[:3,:3] @ source_traj[:,:3].T + sim3[:3,3].reshape(-1,1)).T
-    source_traj_sim3[:,3:7] = source_traj[:,3:7] @ sim3[:3,:3].T
-
-    return source_traj_sim3, sim3
 
 def compare_frame_numbers(a: str, b: str) -> bool:
     # extract numerical part of the key
@@ -61,8 +40,8 @@ def plot_trajectory(colmap_traj, vicon_traj, transformed_vicon2colmap):
     # ax4.legend()
 
     # Plot x and y coordinates of the trajectory in 2D (top-down view)
-    ax2.plot(colmap_traj[:, 0], colmap_traj[:, 1], label='Colmap')
-    ax2.plot(vicon_traj[:, 0], vicon_traj[:, 1], label='Vicon')
+    ax2.plot(colmap_traj[:, 0], colmap_traj[:, 1], label='Colmap c2w', linestyle=':')
+    ax2.plot(vicon_traj[:, 0], vicon_traj[:, 1], label='Vicon w2c')
     ax2.plot(transformed_vicon2colmap[:, 0], transformed_vicon2colmap[:, 1], linestyle='--', color='red', label='vicon2colmap', )
     ax2.set_xlabel('X')
     ax2.set_ylabel('Y')
@@ -78,28 +57,41 @@ def plot_trajectory(colmap_traj, vicon_traj, transformed_vicon2colmap):
 
     plt.show()
 
+# hamiltonian matrix
+def quat2rot(x, y, z, w):
+    rot_mat = np.zeros((3, 3))
+    rot_mat[0, 0] = 1 - 2*y**2 - 2*z**2
+    rot_mat[0, 1] = 2*x*y - 2*z*w
+    rot_mat[0, 2] = 2*x*z + 2*y*w
+    rot_mat[1, 0] = 2*x*y + 2*z*w
+    rot_mat[1, 1] = 1 - 2*x**2 - 2*z**2
+    rot_mat[1, 2] = 2*y*z - 2*x*w
+    rot_mat[2, 0] = 2*x*z - 2*y*w
+    rot_mat[2, 1] = 2*y*z + 2*x*w
+    rot_mat[2, 2] = 1 - 2*x**2 - 2*y**2
+    return rot_mat
+
 def transform2colmap(vicon_trans, vicon_quat):
-    t_col2vicon = np.array([-0.3847422434037402, -0.04886832759628837, -0.3880739867654808])
-    q_col2vicon = np.array([-0.7081920519989893, -0.7055147796551348, 0.02642035161927524, 0.003857226197874406])
-    scale_col2vicon = 0.4665371357393386
+    t_col2vicon = np.array([-0.02466933839056411, -0.3813245901568731 ,0.4045285497581186])
+    q_col2vicon = np.array([-0.01639194085120911, 0.02351608445786384, -0.005617303622487707, 0.9995732809288741])
+    scale_col2vicon = 0.4608682590319365
+    #x,y,z,w format
+    R_vicon2col = R.from_quat([q_col2vicon[0], q_col2vicon[1], q_col2vicon[2], q_col2vicon[3]])
+    #R_col2vicon = R.from_quat(q_col2vicon)
+    #R_CtoG = R.from_quat(vicon_quat)
+    R_CtoG = R.from_quat([vicon_quat[0], vicon_quat[1], vicon_quat[2], vicon_quat[3]])
+    vicon_trans = np.array(vicon_trans).reshape(3,1)
+    #vicon_cam2wld = -R_GtoC.transpose() @ vicon_trans 
 
-    #R_col2vicon = R.from_quat([q_col2vicon[3], q_col2vicon[0], q_col2vicon[1], q_col2vicon[2]])
-    R_col2vicon = R.from_quat(q_col2vicon)
-    R_CtoG = R.from_quat(vicon_quat)
+    p_CinColmap = (R_vicon2col.as_matrix()) @ ((vicon_trans - t_col2vicon.reshape(3,1)) / scale_col2vicon)
 
-    #print("R_CtoG: ")
-    #print(R_CtoG.as_matrix())
-    #print("R_col2vicon: ")
-    #print(R_col2vicon.as_matrix())
-
-    p_CinColmap = np.transpose(R_col2vicon.as_matrix()) @ ((np.array(vicon_trans).reshape(3,1) - t_col2vicon.reshape(3,1)) / scale_col2vicon)
-    R_cam2colmap = np.transpose(R_col2vicon.as_matrix()) @ R_CtoG.as_matrix()
+    R_cam2colmap = R_vicon2col.as_matrix() @ R_CtoG.as_matrix()
     q_cam2colmap = R.from_matrix(R_cam2colmap).as_quat()
 
     return p_CinColmap, q_cam2colmap
 
-pose_vicon = read_trajectory("/media/saimouli/RPNG_FLASH_4/datasets/ar_table/table_01_openvins_gt/transforms.json")
-pose_colmap = read_trajectory("/media/saimouli/RPNG_FLASH_4/datasets/ar_table/table_01_colmap_compare/transforms.json")
+pose_vicon = read_trajectory("/media/saimouli/RPNG_FLASH_4/datasets/ar_table/table_01_openvins_gt/transforms.json") #read_trajectory("/media/saimouli/RPNG_FLASH_4/datasets/ar_table/table_01_openvins_gt/transforms.json")
+pose_colmap = read_trajectory("/media/saimouli/RPNG_FLASH_4/datasets/ar_table/table_01_colmap_test/transforms.json")
 
 img_keys = []
 for key in pose_vicon.keys():
@@ -122,9 +114,31 @@ for key in img_keys:
         vicon_quat = pose_vicon[key][1].tolist()
         vicon_traj.append(vicon_trans + vicon_quat)
 
-        #TODO: convert vins to colmap and store into the traj and plot 
+        #convert vins to colmap and store into the traj and plot 
         p_CinColmap, q_cam2colmap =  transform2colmap(vicon_trans, vicon_quat)
         trans_colmap_traj.append(p_CinColmap.ravel().tolist() + q_cam2colmap.ravel().tolist())
 
 
 plot_trajectory(np.array(colmap_traj), np.array(vicon_traj), np.array(trans_colmap_traj))
+
+# # test from openvins imu to ca2colmap
+
+# t_vicon = np.array([2.043300045139766, 0.5857969124660941, 1.1031512650222695])
+# R_vicon = np.array([[-0.5058920067510982, 0.2927862900254166, -0.8113864658033059],
+#             [0.8517286866776609, 0.020709478457268622, -0.5235727414018592],
+#             [-0.1364919945077367, -0.9559531120895893, -0.2598506483430542]])
+
+# t_col2vicon = np.array([-0.02466933839056411, -0.3813245901568731 ,0.4045285497581186])
+# q_col2vicon = np.array([-0.01639194085120911, 0.02351608445786384, -0.005617303622487707, 0.9995732809288741])
+# scale_col2vicon = 0.4608682590319365
+
+# R_vicon2col = R.from_quat([q_col2vicon[0], q_col2vicon[1], q_col2vicon[2], q_col2vicon[3]])
+# vicon_trans = np.array(t_vicon).reshape(3,1)
+
+# p_CinColmap = (R_vicon2col.as_matrix()) @ ((vicon_trans - t_col2vicon.reshape(3,1)) / scale_col2vicon)
+# R_cam2colmap = R_vicon2col.as_matrix() @ R_vicon
+
+# print("p_CinColmap: ")
+# print(p_CinColmap)
+# print("R_cam2colmap: ")
+# print(R_cam2colmap)
