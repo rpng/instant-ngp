@@ -111,41 +111,27 @@ def write_image_and_pose(image, pose, output_dir, counter, up):
     p_IinG = pose[:3, 3].reshape([3, 1]) #in reality it is p_IinG 
  
     # rigid transformation from cam2imu
-    T_CtoI = np.array([[0.9999654398038452, 0.007342326779113337, -0.003899927610975742, -0.027534314618518095],
+    T_ItoC = np.array([[0.9999654398038452, 0.007342326779113337, -0.003899927610975742, -0.027534314618518095],
               [-0.0073452195116216765, 0.9999727585590525, -0.0007279355223411334, -0.0030587146933711722],
               [0.0038944766308488753, 0.0007565561891287445, 0.9999921303062861, -0.023605118842939803],
               [0.0, 0.0, 0.0, 1.0]])
     
-    p_IinC = T_CtoI[:3, 3] #in reality it is p_IinC
-    R_ItoC = T_CtoI[:3, :3] #in reality it is R_ItoC
+    p_IinC = T_ItoC[:3, 3] #in reality it is p_IinC
+    R_ItoC = T_ItoC[:3, :3] #in reality it is R_ItoC
 
-    #adjustments
     p_GinI = -R_ItoG.transpose() @ p_IinG
     R_CtoI = R_ItoC.transpose()
 
     # transform for cam2wld
-    p_GinC = R_ItoC @ p_GinI + p_IinC.reshape([3,1])
+    p_GinC = R_ItoC @ p_GinI + p_IinC.reshape([3,1]) #wld2cam
     R_CtoG = R_ItoG @ R_CtoI
     
     p_CinG = -R_CtoG @ p_GinC
 
     #R_GtoN = np.array([[0, -1, 0], [-1, 0, 0], [0, 0, -1]])
     #R_CtoN = R_GtoN @ R_CtoG
-    c2w = np.concatenate([np.concatenate([R_CtoG, p_CinG], 1), bottom], 0)
-    #w2c = np.concatenate([np.concatenate([R_CtoG.transpose(), -R_CtoG.transpose() @ p_GinC], 1), bottom], 0) #wld2cam
-    
-    # print("t_cam2wld: ", p_GinC)
-    # print("R_cam2wld: ", R_CtoG)
-    #print("w2c: ", w2c)
+    c2w = np.concatenate([np.concatenate([R_CtoG, p_CinG], 1), bottom], 0) # vicon frame is world frame
 
-    # print("w2c rot: ", w2c)
-    #w2c = Rx(np.pi) @ w2c
-    # # convert to nerf coordinates
-    # c2w[0:3, 2] *= -1  # flip the y and z axis
-    # c2w[0:3, 1] *= -1
-    # c2w = c2w[[1, 0, 2, 3], :]
-    # c2w[2, :] *= -1  # flip whole world upside down
-    # print("c2w: ", c2w)
 
     # rotate the camera to face the table
     up += c2w[0:3, 1]

@@ -41,7 +41,7 @@ def plot_trajectory(colmap_traj, vicon_traj, transformed_vicon2colmap):
 
     # Plot x and y coordinates of the trajectory in 2D (top-down view)
     ax2.plot(colmap_traj[:, 0], colmap_traj[:, 1], label='Colmap c2w', linestyle=':')
-    ax2.plot(vicon_traj[:, 0], vicon_traj[:, 1], label='Vicon w2c')
+    ax2.plot(vicon_traj[:, 0], vicon_traj[:, 1], label='Vicon c2w')
     ax2.plot(transformed_vicon2colmap[:, 0], transformed_vicon2colmap[:, 1], linestyle='--', color='red', label='vicon2colmap', )
     ax2.set_xlabel('X')
     ax2.set_ylabel('Y')
@@ -72,23 +72,23 @@ def quat2rot(x, y, z, w):
     return rot_mat
 
 def transform2colmap(vicon_trans, vicon_quat):
-    t_col2vicon = np.array([-0.02466933839056411, -0.3813245901568731 ,0.4045285497581186])
-    q_col2vicon = np.array([-0.01639194085120911, 0.02351608445786384, -0.005617303622487707, 0.9995732809288741])
-    scale_col2vicon = 0.4608682590319365
+    p_MinG = np.array([0.1202150278123188, -0.2416818268398295 ,1.409115977446361])
+    q_col2vicon = np.array([0.6119368898614118, 0.6269303483098916, -0.397987824310811, 0.2722081425951974])
+    S_GtoM = 1/0.4105941495512236
     #x,y,z,w format
-    R_vicon2col = R.from_quat([q_col2vicon[0], q_col2vicon[1], q_col2vicon[2], q_col2vicon[3]])
+    R_GtoM = R.from_quat([q_col2vicon[0], q_col2vicon[1], q_col2vicon[2], q_col2vicon[3]])
     #R_col2vicon = R.from_quat(q_col2vicon)
     #R_CtoG = R.from_quat(vicon_quat)
     R_CtoG = R.from_quat([vicon_quat[0], vicon_quat[1], vicon_quat[2], vicon_quat[3]])
-    vicon_trans = np.array(vicon_trans).reshape(3,1)
+    p_CinG = np.array(vicon_trans).reshape(3,1)
     #vicon_cam2wld = -R_GtoC.transpose() @ vicon_trans 
 
-    p_CinColmap = (R_vicon2col.as_matrix()) @ ((vicon_trans - t_col2vicon.reshape(3,1)) / scale_col2vicon)
+    p_CinM = (R_GtoM.as_matrix()) @ ((p_CinG - p_MinG.reshape(3,1)) * S_GtoM)
 
-    R_cam2colmap = R_vicon2col.as_matrix() @ R_CtoG.as_matrix()
+    R_cam2colmap = R_GtoM.as_matrix() @ R_CtoG.as_matrix()
     q_cam2colmap = R.from_matrix(R_cam2colmap).as_quat()
 
-    return p_CinColmap, q_cam2colmap
+    return p_CinM, q_cam2colmap
 
 pose_vicon = read_trajectory("/media/saimouli/RPNG_FLASH_4/datasets/ar_table/table_01_openvins_gt/transforms.json") #read_trajectory("/media/saimouli/RPNG_FLASH_4/datasets/ar_table/table_01_openvins_gt/transforms.json")
 pose_colmap = read_trajectory("/media/saimouli/RPNG_FLASH_4/datasets/ar_table/table_01_colmap_test/transforms.json")

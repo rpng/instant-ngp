@@ -21,6 +21,7 @@ import cv2
 import os
 import shutil
 import matplotlib.pyplot as plt
+from scipy.spatial.transform import Rotation
 
 ROOT_DIR = os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
 SCRIPTS_FOLDER = os.path.join(ROOT_DIR, "scripts")
@@ -199,7 +200,7 @@ def plot_trajectory():
     fig, (ax2, ax3) = plt.subplots(2, 1, figsize=(8, 12))
 
     ax2.plot(np.array(cam2wld_traj)[:, 0], np.array(cam2wld_traj)[:, 1], label='cam2wld', linestyle=':')
-    ax2.plot(np.array(wld2cam_traj)[:, 0], np.array(wld2cam_traj)[:, 1], label='wld2cam', linestyle='--')
+    #ax2.plot(np.array(wld2cam_traj)[:, 0], np.array(wld2cam_traj)[:, 1], label='wld2cam', linestyle='--')
     ax2.set_xlabel('X')
     ax2.set_ylabel('Y')
     ax2.legend()
@@ -343,13 +344,16 @@ if __name__ == "__main__":
 				image_id = int(elems[0])
 				qvec = np.array(tuple(map(float, elems[1:5])))
 				tvec = np.array(tuple(map(float, elems[5:8])))
-				R = qvec2rotmat(qvec) #TODO: play with this transform (wld2cam) 
+				R = qvec2rotmat(qvec) # hamiltonian # w,x,y,z
+				#R_test = Rotation.from_quat([qvec[1],qvec[2], qvec[3], qvec[0]]) #GtoC   #x,y,z,w
+				#print("R", R)
+				#print("R_test", R_test.as_matrix())
 				t = tvec.reshape([3,1]) #->GinC
 				m = np.concatenate([np.concatenate([R, t], 1), bottom], 0) #R_WtoC
 				# wld2cam_traj.append(m[:3,3].reshape([3,]).tolist())
 				c2w = np.linalg.inv(m) #R_CtoW, p_WinC
 				# in our language world to cam
-				
+				cam2wld_traj.append(c2w[:3,3].reshape([3,]).tolist())
 			# p_GinC // cam2wld? 
 			# RGtoC // wld2cam
 
@@ -361,28 +365,39 @@ if __name__ == "__main__":
 				#c2w = np.linalg.inv(m)
 				#cam2wld_traj.append(c2w[:3,3].reshape([3,]).tolist())
 				#print("c2w before nerf: ", c2w)
-
+				
 				if not args.keep_colmap_coords:
-					#test = c2w
-					c2w[0:3,2] *= -1 # flip the y and z axis
-					#print("c2w flipz: ", c2w)
-					c2w[0:3,1] *= -1
-					#print("c2w flipy: ", c2w)
-					c2w = c2w[[1,0,2,3],:]
-					c2w[2,:] *= -1 # flip whole world upside down
-					#print("c2w after nerf: ", c2w)
-					
-					# # swap row 1 and 2
-					# P = np.array([[0, 1, 0, 0],
-					# 	[-1, 0, 0, 0],
-					# 	[0, 0, 1, 0],
-					# 	[0, 0, 0, 1]])
-					# test_ = P @ test
-					# print("test: ", test)
-					cam2wld_traj.append(c2w[:3,3].reshape([3,]).tolist())
-					#print("cam2wld_traj: ", c2w[:3,3].reshape([3,]).tolist())
+					# c2w[0:3,2] *= -1 # flip the y and z axis
+					# c2w[0:3,1] *= -1
+					# c2w = c2w[[1,0,2,3],:]
+					# c2w[2,:] *= -1 # flip whole world upside down
+					# def rotx(theta):
+					# 	TRx = np.array([
+					# 		[1, 0, 0, 0],
+					# 		[0, np.cos(theta), -np.sin(theta),0],
+					# 		[0, np.sin(theta), np.cos(theta),0],
+					# 		[0, 0, 0, 1]])
+					# 	return TRx
+					# def roty(theta):
+					# 	TRy = np.array([
+					# 		[np.cos(theta), 0, np.sin(theta),0],
+					# 		[0, 1, 0,0],
+					# 		[-np.sin(theta), 0, np.cos(theta),0],
+					# 		[0, 0, 0, 1]])
+					# 	return TRy
+					# def rotz(theta):
+					# 	TRz = np.array([
+					# 		[np.cos(theta), -np.sin(theta), 0,0],
+					# 		[np.sin(theta), np.cos(theta), 0,0],
+					# 		[0, 0, 1,0],
+					# 		[0, 0, 0, 1]])
+					# 	return TRz
 
-					up += c2w[0:3,1]
+					# T_WtoG = rotz(-np.pi/2) @ rotx(np.pi/2)
+					# c2w = T_WtoG @ c2w
+					dummy = c2w[0:3,1].copy()
+					dummy *= -1
+					up += dummy
 
 				frame = {"file_path":name,"sharpness":b,"transform_matrix": c2w}
 				out["frames"].append(frame)
@@ -397,46 +412,48 @@ if __name__ == "__main__":
 		])
 
 		for f in out["frames"]:
-			f["transform_matrix"] = np.matmul(f["transform_matrix"], flip_mat) # flip cameras (it just works)
+			#f["transform_matrix"] = np.matmul(f["transform_matrix"], flip_mat) # flip cameras (it just works)
+			f["transform_matrix"] = flip_mat @ f["transform_matrix"]
 			#print(f["transform_matrix"])
-			cam2wld_traj.append(f["transform_matrix"][:3,3].reshape([3,]).tolist())
+			#cam2wld_traj.append(f["transform_matrix"][:3,3].reshape([3,]).tolist())
 	else:
+		pass
 		# don't keep colmap coords - reorient the scene to be easier to work with
 
-		up = up / np.linalg.norm(up)
-		print("up vector was", up)
-		R = rotmat(up,[0,0,1]) # rotate up vector to [0,0,1]
-		R = np.pad(R,[0,1])
-		R[-1, -1] = 1
+		# up = up / np.linalg.norm(up)
+		# print("up vector was", up)
+		# R = rotmat(up,[0,0,1]) # rotate up vector to [0,0,1]
+		# R = np.pad(R,[0,1])
+		# R[-1, -1] = 1
 
 		for f in out["frames"]:
 			f["transform_matrix"] = np.matmul(R, f["transform_matrix"]) # rotate up to be the z axis
 
 		# find a central point they are all looking at
-		print("computing center of attention...")
-		totw = 0.0
-		totp = np.array([0.0, 0.0, 0.0])
-		for f in out["frames"]:
-			mf = f["transform_matrix"][0:3,:]
-			for g in out["frames"]:
-				mg = g["transform_matrix"][0:3,:]
-				p, w = closest_point_2_lines(mf[:,3], mf[:,2], mg[:,3], mg[:,2])
-				if w > 0.00001:
-					totp += p*w
-					totw += w
-		if totw > 0.0:
-			totp /= totw
-		print(totp) # the cameras are looking at totp
-		for f in out["frames"]:
-			f["transform_matrix"][0:3,3] -= totp
+		# print("computing center of attention...")
+		# totw = 0.0
+		# totp = np.array([0.0, 0.0, 0.0])
+		# for f in out["frames"]:
+		# 	mf = f["transform_matrix"][0:3,:]
+		# 	for g in out["frames"]:
+		# 		mg = g["transform_matrix"][0:3,:]
+		# 		p, w = closest_point_2_lines(mf[:,3], mf[:,2], mg[:,3], mg[:,2])
+		# 		if w > 0.00001:
+		# 			totp += p*w
+		# 			totw += w
+		# if totw > 0.0:
+		# 	totp /= totw
+		# print(totp) # the cameras are looking at totp
+		# for f in out["frames"]:
+		# 	f["transform_matrix"][0:3,3] -= totp
 
-		avglen = 0.
-		for f in out["frames"]:
-			avglen += np.linalg.norm(f["transform_matrix"][0:3,3])
-		avglen /= nframes
-		print("avg camera distance from origin", avglen)
-		for f in out["frames"]:
-			f["transform_matrix"][0:3,3] *= 4.0 / avglen # scale to "nerf sized"
+		# avglen = 0.
+		# for f in out["frames"]:
+		# 	avglen += np.linalg.norm(f["transform_matrix"][0:3,3])
+		# avglen /= nframes
+		# print("avg camera distance from origin", avglen)
+		# for f in out["frames"]:
+		# 	f["transform_matrix"][0:3,3] *= 4.0 / avglen # scale to "nerf sized"
 
 	#plot_trajectory()
 	for f in out["frames"]:

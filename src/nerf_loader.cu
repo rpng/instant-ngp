@@ -272,7 +272,7 @@ NerfDataset load_nerf(const std::vector<fs::path>& jsonpaths, float sharpen_amou
 		throw std::runtime_error{"Cannot load NeRF data from an empty set of paths."};
 	}
 
-	tlog::info() << "Loading NeRF dataset from";
+	tlog::info() << "Loading NeRF datasets from";
 
 	NerfDataset result{};
 
@@ -656,6 +656,17 @@ NerfDataset load_nerf(const std::vector<fs::path>& jsonpaths, float sharpen_amou
 			}
 
 			nlohmann::json& jsonmatrix_start = frame.contains("transform_matrix_start") ? frame["transform_matrix_start"] : frame["transform_matrix"];
+
+			// training for colmap we flip the signs of y and z columns of the matrix
+			// std::cout<< "applying hack"<<std::endl;
+			for (int m = 0; m < 3; ++m) {
+				for (int n = 0; n < 4; ++n) {
+					if (n == 1 || n == 2) {
+						jsonmatrix_start[m][n] = -float(jsonmatrix_start[m][n]);
+					}
+				}
+			}
+
 			nlohmann::json& jsonmatrix_end = frame.contains("transform_matrix_end") ? frame["transform_matrix_end"] : jsonmatrix_start;
 
 			if (frame.contains("driver_parameters")) {
@@ -677,6 +688,7 @@ NerfDataset load_nerf(const std::vector<fs::path>& jsonpaths, float sharpen_amou
 
 			for (int m = 0; m < 3; ++m) {
 				for (int n = 0; n < 4; ++n) {
+					//std::cout<< "jsonmatrix_start["<<m<<"]"<<"["<<n<<"]" << jsonmatrix_start[m][n]<<std::endl;
 					result.xforms[i_img].start(m, n) = float(jsonmatrix_start[m][n]);
 					result.xforms[i_img].end(m, n) = float(jsonmatrix_end[m][n]);
 				}
@@ -1078,7 +1090,7 @@ NerfDataset NerfDataset::add_training_image(nlohmann::json frame, uint8_t *img, 
 	} else {
 		throw std::runtime_error{"Couldn't read fov."};
 	}
-
+	
 	for (int m = 0; m < 3; ++m) {
 		for (int n = 0; n < 4; ++n) {
 			this->xforms[i_img].start(m, n) = float(jsonmatrix_start[m][n]);
