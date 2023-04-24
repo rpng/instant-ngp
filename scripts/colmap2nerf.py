@@ -350,10 +350,10 @@ if __name__ == "__main__":
 				#print("R_test", R_test.as_matrix())
 				t = tvec.reshape([3,1]) #->GinC
 				m = np.concatenate([np.concatenate([R, t], 1), bottom], 0) #R_WtoC
-				# wld2cam_traj.append(m[:3,3].reshape([3,]).tolist())
+				wld2cam_traj.append(m[:3,3].reshape([3,]).tolist())
 				c2w = np.linalg.inv(m) #R_CtoW, p_WinC
 				# in our language world to cam
-				cam2wld_traj.append(c2w[:3,3].reshape([3,]).tolist())
+				
 			# p_GinC // cam2wld? 
 			# RGtoC // wld2cam
 
@@ -371,34 +371,9 @@ if __name__ == "__main__":
 					# c2w[0:3,1] *= -1
 					# c2w = c2w[[1,0,2,3],:]
 					# c2w[2,:] *= -1 # flip whole world upside down
-					# def rotx(theta):
-					# 	TRx = np.array([
-					# 		[1, 0, 0, 0],
-					# 		[0, np.cos(theta), -np.sin(theta),0],
-					# 		[0, np.sin(theta), np.cos(theta),0],
-					# 		[0, 0, 0, 1]])
-					# 	return TRx
-					# def roty(theta):
-					# 	TRy = np.array([
-					# 		[np.cos(theta), 0, np.sin(theta),0],
-					# 		[0, 1, 0,0],
-					# 		[-np.sin(theta), 0, np.cos(theta),0],
-					# 		[0, 0, 0, 1]])
-					# 	return TRy
-					# def rotz(theta):
-					# 	TRz = np.array([
-					# 		[np.cos(theta), -np.sin(theta), 0,0],
-					# 		[np.sin(theta), np.cos(theta), 0,0],
-					# 		[0, 0, 1,0],
-					# 		[0, 0, 0, 1]])
-					# 	return TRz
-
-					# T_WtoG = rotz(-np.pi/2) @ rotx(np.pi/2)
-					# c2w = T_WtoG @ c2w
-					dummy = c2w[0:3,1].copy()
-					dummy *= -1
-					up += dummy
-
+					pass
+					
+				cam2wld_traj.append(c2w[:3,3].reshape([3,]).tolist())
 				frame = {"file_path":name,"sharpness":b,"transform_matrix": c2w}
 				out["frames"].append(frame)
 	nframes = len(out["frames"])
@@ -426,8 +401,8 @@ if __name__ == "__main__":
 		# R = np.pad(R,[0,1])
 		# R[-1, -1] = 1
 
-		for f in out["frames"]:
-			f["transform_matrix"] = np.matmul(R, f["transform_matrix"]) # rotate up to be the z axis
+		# for f in out["frames"]:
+		# 	f["transform_matrix"] = np.matmul(R, f["transform_matrix"]) # rotate up to be the z axis
 
 		# find a central point they are all looking at
 		# print("computing center of attention...")
@@ -455,7 +430,7 @@ if __name__ == "__main__":
 		# for f in out["frames"]:
 		# 	f["transform_matrix"][0:3,3] *= 4.0 / avglen # scale to "nerf sized"
 
-	#plot_trajectory()
+	plot_trajectory()
 	for f in out["frames"]:
 		f["transform_matrix"] = f["transform_matrix"].tolist()
 	print(nframes,"frames")

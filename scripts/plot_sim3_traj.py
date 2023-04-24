@@ -71,10 +71,31 @@ def quat2rot(x, y, z, w):
     rot_mat[2, 2] = 1 - 2*x**2 - 2*y**2
     return rot_mat
 
+def write2file(colmap_traj, transformed_vicon2colmap):
+    # store colmap traj and vicon2colmap traj into two file
+    filename_colmap = '/media/saimouli/RPNG_FLASH_4/datasets/ar_table/results/traj/colmap_traj.txt'
+    filename_vicon2colmap = '/media/saimouli/RPNG_FLASH_4/datasets/ar_table/results/traj/vicon2colmap_traj.txt'
+    with open(filename_colmap, 'w') as f:
+        f.write("# timestamp(s) tx ty tz qx qy qz qw Pr11 Pr12 Pr13 Pr22 Pr23 Pr33 Pt11 Pt12 Pt13 Pt22 Pt23 Pt33\n")
+        for i in range(len(colmap_traj)):
+            timestamp = i
+            pose = colmap_traj[i]
+            row = [timestamp] + list(pose[0:3]) + list(pose[3:]) + list(np.zeros(12))
+            row_str = " ".join([str(x) for x in row]) + "\n"
+            f.write(row_str)
+    with open(filename_vicon2colmap, 'w') as f:
+        f.write("# timestamp(s) tx ty tz qx qy qz qw Pr11 Pr12 Pr13 Pr22 Pr23 Pr33 Pt11 Pt12 Pt13 Pt22 Pt23 Pt33\n")
+        for i in range(len(transformed_vicon2colmap)):
+            timestamp = i
+            pose = transformed_vicon2colmap[i]
+            row = [timestamp] + list(pose[0:3]) + list(pose[3:]) + list(np.zeros(12))
+            row_str = " ".join([str(x) for x in row]) + "\n"
+            f.write(row_str)
+
 def transform2colmap(vicon_trans, vicon_quat):
     p_MinG = np.array([0.1202150278123188, -0.2416818268398295 ,1.409115977446361])
-    q_col2vicon = np.array([0.6119368898614118, 0.6269303483098916, -0.397987824310811, 0.2722081425951974])
-    S_GtoM = 1/0.4105941495512236
+    q_col2vicon = np.array([0.08893966587659595, -0.4739001129231136, -0.01060197614235877, 0.8760114251007783])
+    S_GtoM = 1/0.4105941495512237
     #x,y,z,w format
     R_GtoM = R.from_quat([q_col2vicon[0], q_col2vicon[1], q_col2vicon[2], q_col2vicon[3]])
     #R_col2vicon = R.from_quat(q_col2vicon)
@@ -91,7 +112,7 @@ def transform2colmap(vicon_trans, vicon_quat):
     return p_CinM, q_cam2colmap
 
 pose_vicon = read_trajectory("/media/saimouli/RPNG_FLASH_4/datasets/ar_table/table_01_openvins_gt/transforms.json") #read_trajectory("/media/saimouli/RPNG_FLASH_4/datasets/ar_table/table_01_openvins_gt/transforms.json")
-pose_colmap = read_trajectory("/media/saimouli/RPNG_FLASH_4/datasets/ar_table/table_01_colmap_test/transforms.json")
+pose_colmap = read_trajectory("/media/saimouli/RPNG_FLASH_4/datasets/ar_table/table_01_colmap/transforms.json")
 
 img_keys = []
 for key in pose_vicon.keys():
@@ -118,7 +139,7 @@ for key in img_keys:
         p_CinColmap, q_cam2colmap =  transform2colmap(vicon_trans, vicon_quat)
         trans_colmap_traj.append(p_CinColmap.ravel().tolist() + q_cam2colmap.ravel().tolist())
 
-
+write2file(np.array(colmap_traj), np.array(trans_colmap_traj))
 plot_trajectory(np.array(colmap_traj), np.array(vicon_traj), np.array(trans_colmap_traj))
 
 # # test from openvins imu to ca2colmap

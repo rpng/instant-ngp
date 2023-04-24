@@ -3234,7 +3234,7 @@ cv::Mat Testbed::linear_to_srgb(cv::Mat img) {
     return img_srgb;
 }
 
-cv::Mat Testbed::render_image_vins(Eigen::Matrix<float, 3, 4> cam_matrix, int width, int height, int spp, bool linear, float shutter_fraction) {
+cv::Mat Testbed::render_image_vins(Eigen::Matrix<float, 3, 4> cam_matrix, int width, int height, int spp, bool linear, float shutter_fraction, bool depth_img) {
 	m_windowless_render_surface.resize({width, height});
     m_windowless_render_surface.reset_accumulation();
     float end_time = -1.0; float start_time = -1.0;
@@ -3271,6 +3271,12 @@ cv::Mat Testbed::render_image_vins(Eigen::Matrix<float, 3, 4> cam_matrix, int wi
 	auto start_cam_matrix = m_smoothed_camera;
 	auto end_cam_matrix = m_smoothed_camera;
 
+	if (depth_img) {
+		m_render_mode = ERenderMode::Depth;
+	}
+	else {
+		m_render_mode = ERenderMode::Shade;
+	}
     for (int i = 0; i < spp; ++i) {
         float start_alpha = ((float)i)/(float)spp * shutter_fraction;
         float end_alpha = ((float)i + 1.0f)/(float)spp * shutter_fraction;
@@ -3288,15 +3294,18 @@ cv::Mat Testbed::render_image_vins(Eigen::Matrix<float, 3, 4> cam_matrix, int wi
 
 	cv::Mat img(height, width, CV_32FC4);
 	CUDA_CHECK_THROW(cudaMemcpy2DFromArray(img.ptr<float4>(), img.step, m_windowless_render_surface.surface_provider().array(), 0, 0, width * sizeof(float) * 4, height, cudaMemcpyDeviceToHost));
-
-	cv::Mat img_copy = img.clone();
-	//cv::Mat img_exp = img.clone();
-	//std::cout<< "img_copy shape: "<< img_copy.size() << " x "<< img_copy.channels()<< std::endl;
-	
-	
 	cv::Mat bgr_img;
-	cv::cvtColor(img_copy, bgr_img, cv::COLOR_RGBA2BGR);
-	bgr_img.convertTo(bgr_img, CV_8UC3, 255.0);
+	if (depth_img) {
+		//std::cout<< "depth im size: "<< img.size() << std::endl;
+		cv::Mat img_copy = img.clone();
+		cv::cvtColor(img_copy, bgr_img, cv::COLOR_RGBA2GRAY);
+		bgr_img.convertTo(bgr_img, CV_32F);
+	}
+	else {
+		cv::Mat img_copy = img.clone();
+		cv::cvtColor(img_copy, bgr_img, cv::COLOR_RGBA2BGR);
+		bgr_img.convertTo(bgr_img, CV_8UC3, 255.0);
+	}
 
 	//std::cout<< "bgr image shape: "<< bgr_img.size() << std::endl;
 	//cv::imwrite("/media/saimouli/RPNG_FLASH_4/datasets/ar_table/table_01_sample/test.jpg", bgr_img);
