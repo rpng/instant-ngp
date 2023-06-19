@@ -19,9 +19,11 @@ if (NOT NGP_DEPLOY)
 	set(NGP_VERSION "${NGP_VERSION}dev")
 endif()
 
+option(NGP_BUILD_EXECUTABLE "Build instant-ngp.exe?" ON)
 option(NGP_BUILD_WITH_GUI "Build with GUI support (requires GLFW and GLEW)?" ON)
-option(NGP_BUILD_WITH_VULKAN "Build with Vulkan to enable DLSS support?" ON)
 option(NGP_BUILD_WITH_OPTIX "Build with OptiX to enable hardware ray tracing?" ON)
+option(NGP_BUILD_WITH_PYTHON_BINDINGS "Build bindings that allow instrumenting instant-ngp with Python?" ON)
+option(NGP_BUILD_WITH_VULKAN "Build with Vulkan to enable DLSS support?" ON)
 
 set(CMAKE_MODULE_PATH ${CMAKE_MODULE_PATH} ${CMAKE_CURRENT_SOURCE_DIR}/cmake)
 
@@ -52,6 +54,7 @@ if (MSVC)
 	set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} /D_CRT_SECURE_NO_WARNINGS")
 	set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} /MP24")
 else()
+	set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fms-extensions")
 	set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fPIC")
 endif()
 
@@ -71,13 +74,14 @@ set(CMAKE_CUDA_RUNTIME_LIBRARY Shared)
 if (MSVC)
 	list(APPEND CUDA_NVCC_FLAGS "-Xcompiler=/bigobj")
 else()
-	list(APPEND CUDA_NVCC_FLAGS "-Xcompiler=-mf16c")
 	list(APPEND CUDA_NVCC_FLAGS "-Xcompiler=-Wno-float-conversion")
 	list(APPEND CUDA_NVCC_FLAGS "-Xcompiler=-fno-strict-aliasing")
+	list(APPEND CUDA_NVCC_FLAGS "-Xcompiler=-fms-extensions")
 	list(APPEND CUDA_NVCC_FLAGS "-Xcompiler=-fPIC")
 endif()
 list(APPEND CUDA_NVCC_FLAGS "--extended-lambda")
 list(APPEND CUDA_NVCC_FLAGS "--expt-relaxed-constexpr")
+list(APPEND CUDA_NVCC_FLAGS "--use_fast_math")
 
 ###############################################################################
 # Dependencies
@@ -119,6 +123,38 @@ if (NGP_BUILD_WITH_GUI)
 		endif()
 	endif()
 
+	# OpenXR
+	if (WIN32)
+		list(APPEND NGP_DEFINITIONS -DXR_USE_PLATFORM_WIN32 -DGLFW_EXPOSE_NATIVE_WGL)
+	elseif (UNIX AND NOT APPLE)
+		list(APPEND NGP_DEFINITIONS -DGLFW_EXPOSE_NATIVE_GLX)
+		if (JK_USE_WAYLAND)
+			set(PRESENTATION_BACKEND wayland CACHE STRING " " FORCE)
+			set(BUILD_WITH_XLIB_HEADERS OFF CACHE BOOL " " FORCE)
+			set(BUILD_WITH_XCB_HEADERS OFF CACHE BOOL " " FORCE)
+			set(BUILD_WITH_WAYLAND_HEADERS ON CACHE BOOL " " FORCE)
+			list(APPEND NGP_DEFINITIONS -DGLFW_EXPOSE_NATIVE_WAYLAND -DXR_USE_PLATFORM_WAYLAND)
+		else()
+			set(PRESENTATION_BACKEND xlib CACHE STRING " " FORCE)
+			set(BUILD_WITH_XLIB_HEADERS ON CACHE BOOL " " FORCE)
+			set(BUILD_WITH_XCB_HEADERS OFF CACHE BOOL " " FORCE)
+			set(BUILD_WITH_WAYLAND_HEADERS OFF CACHE BOOL " " FORCE)
+			list(APPEND NGP_DEFINITIONS -DGLFW_EXPOSE_NATIVE_X11 -DXR_USE_PLATFORM_XLIB)
+		endif()
+	else()
+		message(FATAL_ERROR "No OpenXR platform set for this OS")
+	endif()
+
+	add_subdirectory(dependencies/OpenXR-SDK)
+
+	list(APPEND NGP_INCLUDE_DIRECTORIES "dependencies/OpenXR-SDK/include" "dependencies/OpenXR-SDK/src/common")
+	list(APPEND NGP_LIBRARIES openxr_loader)
+	list(APPEND GUI_SOURCES src/openxr_hmd.cu)
+
+	# OpenGL
+	find_package(OpenGL REQUIRED)
+
+	# GLFW
 	set(GLFW_BUILD_EXAMPLES OFF CACHE BOOL " " FORCE)
 	set(GLFW_BUILD_TESTS OFF CACHE BOOL " " FORCE)
 	set(GLFW_BUILD_DOCS OFF CACHE BOOL " " FORCE)
@@ -166,9 +202,10 @@ endif(NGP_BUILD_WITH_GUI)
 
 list(APPEND NGP_INCLUDE_DIRECTORIES
 	"dependencies"
-	"dependencies/eigen"
 	"dependencies/filesystem"
+	"dependencies/glm"
 	"dependencies/nanovdb"
+	"dependencies/NaturalSort"
 	"dependencies/tinylogger"
 )
 
@@ -184,9 +221,11 @@ if (NGP_BUILD_WITH_OPTIX)
 	list(APPEND NGP_DEFINITIONS -DNGP_OPTIX)
 endif()
 
-find_package(Python 3.7 COMPONENTS Interpreter Development)
-if (Python_FOUND)
-	add_subdirectory("dependencies/pybind11")
+if (NGP_BUILD_WITH_PYTHON_BINDINGS)
+	find_package(Python 3.7 COMPONENTS Interpreter Development)
+	if (Python_FOUND)
+		add_subdirectory("dependencies/pybind11")
+	endif()
 endif()
 
 # Compile zlib (only on Windows)
@@ -297,37 +336,44 @@ target_include_directories(ngp PUBLIC ${NGP_INCLUDE_DIRECTORIES})
 target_link_directories(ngp PUBLIC ${NGP_LINK_DIRECTORIES})
 target_link_libraries(ngp PUBLIC ${NGP_LIBRARIES} tiny-cuda-nn)
 
-add_executable(instant-ngp src/main.cu)
-target_link_libraries(instant-ngp PRIVATE ngp)
-
-# Copy DLSS shared libraries
+# Copy shared libraries to the binary directory as needed
 if (NGP_VULKAN)
 	set(NGX_BUILD_DIR "$<IF:$<CONFIG:Debug>,dev,rel>")
-
 	if (MSVC)
-		add_custom_command(TARGET instant-ngp POST_BUILD
-			COMMAND ${CMAKE_COMMAND} -E copy "${CMAKE_CURRENT_SOURCE_DIR}/dependencies/dlss/lib/Windows_x86_64/${NGX_BUILD_DIR}/nvngx_dlss.dll" $<TARGET_FILE_DIR:instant-ngp>
-			COMMAND_EXPAND_LISTS
-		)
+		set(NGX_SHARED_LIB "${CMAKE_CURRENT_SOURCE_DIR}/dependencies/dlss/lib/Windows_x86_64/${NGX_BUILD_DIR}/nvngx_dlss.dll")
 	else()
-		add_custom_command(TARGET instant-ngp POST_BUILD
-			COMMAND ${CMAKE_COMMAND} -E copy "${CMAKE_CURRENT_SOURCE_DIR}/dependencies/dlss/lib/Linux_x86_64/${NGX_BUILD_DIR}/libnvidia-ngx-dlss.so.*" $<TARGET_FILE_DIR:instant-ngp>
-			COMMAND_EXPAND_LISTS
-		)
+		set(NGX_SHARED_LIB "${CMAKE_CURRENT_SOURCE_DIR}/dependencies/dlss/lib/Linux_x86_64/${NGX_BUILD_DIR}/libnvidia-ngx-dlss.so.*")
 	endif()
+
+	add_custom_command(TARGET ngp POST_BUILD COMMAND ${CMAKE_COMMAND} -E copy "${NGX_SHARED_LIB}" "${CMAKE_CURRENT_BINARY_DIR}" COMMAND_EXPAND_LISTS)
 endif()
 
 if (MSVC)
-	# Copy CUDA runtime DLLs to the build directory so that Python can find them.
 	file(GLOB CUDA_DLLS "${CUDA_COMPILER_BIN}/cudart64*.dll")
 	if (CUDA_DLLS)
-		add_custom_command(TARGET instant-ngp POST_BUILD
-			COMMAND ${CMAKE_COMMAND} -E copy ${CUDA_DLLS} $<TARGET_FILE_DIR:instant-ngp>
-			COMMAND_EXPAND_LISTS
-		)
+		add_custom_command(TARGET ngp POST_BUILD COMMAND ${CMAKE_COMMAND} -E copy ${CUDA_DLLS} "${CMAKE_CURRENT_BINARY_DIR}" COMMAND_EXPAND_LISTS)
 	endif()
 endif()
 
+if (NGP_BUILD_EXECUTABLE)
+	add_executable(instant-ngp src/main.cu)
+	target_link_libraries(instant-ngp PRIVATE ngp)
+
+	# Link the executable to the project directory and copy over DLLs such that instant-ngp can be invoked without going into the build folder.
+	set(NGP_BINARY_FILE "\"${CMAKE_CURRENT_SOURCE_DIR}/$<TARGET_FILE_NAME:instant-ngp>\"")
+	if (MSVC)
+		add_custom_command(TARGET instant-ngp POST_BUILD COMMAND ${CMAKE_COMMAND} -E copy $<TARGET_FILE:instant-ngp> ${CMAKE_CURRENT_SOURCE_DIR})
+		file(GLOB NGP_REQUIRED_DLLS "${CUDA_COMPILER_BIN}/cudart64*.dll")
+		if (NGP_VULKAN)
+			list(APPEND NGP_REQUIRED_DLLS "${NGX_SHARED_LIB}")
+		endif()
+		if (NGP_REQUIRED_DLLS)
+			add_custom_command(TARGET instant-ngp POST_BUILD COMMAND ${CMAKE_COMMAND} -E copy ${NGP_REQUIRED_DLLS} ${CMAKE_CURRENT_SOURCE_DIR} COMMAND_EXPAND_LISTS)
+		endif()
+	else()
+		add_custom_command(TARGET instant-ngp POST_BUILD COMMAND ${CMAKE_COMMAND} -E create_symlink $<TARGET_FILE:instant-ngp> "${NGP_BINARY_FILE}")
+	endif()
+endif(NGP_BUILD_EXECUTABLE)
 
 if (Python_FOUND)
 	add_library(pyngp SHARED src/python_api.cu)
@@ -335,20 +381,4 @@ if (Python_FOUND)
 	target_link_libraries(pyngp PRIVATE ngp PUBLIC ${PYTHON_LIBRARIES} pybind11::module)
 	target_compile_definitions(pyngp PUBLIC -DNGP_PYTHON)
 	pybind11_extension(pyngp)
-endif()
-
-# Link the executable to the project directory and copy over DLLs such that instant-ngp can be invoked without going into the build folder.
-set(NGP_BINARY_FILE "\"${CMAKE_CURRENT_SOURCE_DIR}/$<TARGET_FILE_NAME:instant-ngp>\"")
-if (MSVC)
-	add_custom_command(TARGET instant-ngp POST_BUILD COMMAND ${CMAKE_COMMAND} -E copy $<TARGET_FILE:instant-ngp> ${CMAKE_CURRENT_SOURCE_DIR})
-	file(GLOB NGP_REQUIRED_DLLS "${CUDA_COMPILER_BIN}/cudart64*.dll")
-	list(APPEND NGP_REQUIRED_DLLS "${CMAKE_CURRENT_SOURCE_DIR}/dependencies/dlss/lib/Windows_x86_64/${NGX_BUILD_DIR}/nvngx_dlss.dll")
-	if (NGP_REQUIRED_DLLS)
-		add_custom_command(TARGET instant-ngp POST_BUILD
-			COMMAND ${CMAKE_COMMAND} -E copy ${NGP_REQUIRED_DLLS} ${CMAKE_CURRENT_SOURCE_DIR}
-			COMMAND_EXPAND_LISTS
-		)
-	endif()
-else()
-	add_custom_command(TARGET instant-ngp POST_BUILD COMMAND ${CMAKE_COMMAND} -E create_symlink $<TARGET_FILE:instant-ngp> "${NGP_BINARY_FILE}")
 endif()

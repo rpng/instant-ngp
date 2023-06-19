@@ -48,11 +48,11 @@ def parse_args():
 
 	parser.add_argument("--video_camera_path", default="", help="The camera path to render, e.g., base_cam.json.")
 	parser.add_argument("--video_camera_smoothing", action="store_true", help="Applies additional smoothing to the camera trajectory with the caveat that the endpoint of the camera path may not be reached.")
-	parser.add_argument("--video_loop_animation", action="store_true", help="Connect the last and first keyframes in a continuous loop.")
 	parser.add_argument("--video_fps", type=int, default=60, help="Number of frames per second.")
 	parser.add_argument("--video_n_seconds", type=int, default=1, help="Number of seconds the rendered video should be long.")
+	parser.add_argument("--video_render_range", type=int, nargs=2, default=(-1, -1), metavar=("START_FRAME", "END_FRAME"), help="Limit output to frames between START_FRAME and END_FRAME (inclusive)")
 	parser.add_argument("--video_spp", type=int, default=8, help="Number of samples per pixel. A larger number means less noise, but slower rendering.")
-	parser.add_argument("--video_output", type=str, default="video.mp4", help="Filename of the output video.")
+	parser.add_argument("--video_output", type=str, default="video.mp4", help="Filename of the output video (video.mp4) or video frames (video_%%04d.png).")
 
 	parser.add_argument("--save_mesh", default="", help="Output a marching-cubes based mesh from the NeRF or SDF model. Supports OBJ and PLY format.")
 	parser.add_argument("--marching_cubes_res", default=256, type=int, help="Sets the resolution for the marching cubes grid.")
@@ -64,6 +64,7 @@ def parse_args():
 	parser.add_argument("--train", action="store_true", help="If the GUI is enabled, controls whether training starts immediately.")
 	parser.add_argument("--n_steps", type=int, default=-1, help="Number of steps to train for before quitting.")
 	parser.add_argument("--second_window", action="store_true", help="Open a second window containing a copy of the main output.")
+	parser.add_argument("--vr", action="store_true", help="Render to a VR headset.")
 
 	parser.add_argument("--sharpen", default=0, help="Set amount of sharpening applied to NeRF training images. Range 0.0 to 1.0.")
 
@@ -78,11 +79,14 @@ def get_scene(scene):
 
 if __name__ == "__main__":
 	args = parse_args()
+	if args.vr: # VR implies having the GUI running at the moment
+		args.gui = True
 
 	if args.mode:
 		print("Warning: the '--mode' argument is no longer in use. It has no effect. The mode is automatically chosen based on the scene.")
 
 	testbed = ngp.Testbed()
+	testbed.root_dir = ROOT_DIR
 
 	for file in args.files:
 		scene_info = get_scene(file)
@@ -106,7 +110,9 @@ if __name__ == "__main__":
 		while sw * sh > 1920 * 1080 * 4:
 			sw = int(sw / 2)
 			sh = int(sh / 2)
-		testbed.init_window(sw, sh, second_window = args.second_window or False)
+		testbed.init_window(sw, sh, second_window=args.second_window)
+		if args.vr:
+			testbed.init_vr()
 
 
 	if args.load_snapshot:
@@ -159,10 +165,8 @@ if __name__ == "__main__":
 		# setting here.
 		testbed.nerf.cone_angle_constant = 0
 
-		# Optionally match nerf paper behaviour and train on a
-		# fixed white bg. We prefer training on random BG colors.
-		# testbed.background_color = [1.0, 1.0, 1.0, 1.0]
-		# testbed.nerf.training.random_bg_color = False
+		# Match nerf paper behaviour and train on a fixed bg.
+		testbed.nerf.training.random_bg_color = False
 
 	old_training_step = 0
 	n_steps = args.n_steps
@@ -175,7 +179,7 @@ if __name__ == "__main__":
 
 	tqdm_last_update = 0
 	if n_steps > 0:
-		with tqdm(desc="Training", total=n_steps, unit="step") as t:
+		with tqdm(desc="Training", total=n_steps, unit="steps") as t:
 			while testbed.frame():
 				if testbed.want_repl():
 					repl(testbed)
@@ -223,53 +227,24 @@ if __name__ == "__main__":
 
 		testbed.nerf.render_min_transmittance = 1e-4
 
-		testbed.fov_axis = 0
-		testbed.fov = test_transforms["camera_angle_x"] * 180 / np.pi
 		testbed.shall_train = False
+		testbed.load_training_data(args.test_transforms)
 
-		with tqdm(list(enumerate(test_transforms["frames"])), unit="images", desc=f"Rendering test frame") as t:
-			for i, frame in t:
-				p = frame["file_path"]
-				if "." not in p:
-					p = p + ".png"
-				ref_fname = os.path.join(data_dir, p)
-				if not os.path.isfile(ref_fname):
-					ref_fname = os.path.join(data_dir, p + ".png")
-					if not os.path.isfile(ref_fname):
-						ref_fname = os.path.join(data_dir, p + ".jpg")
-						if not os.path.isfile(ref_fname):
-							ref_fname = os.path.join(data_dir, p + ".jpeg")
-							if not os.path.isfile(ref_fname):
-								ref_fname = os.path.join(data_dir, p + ".exr")
-
-				ref_image = read_image(ref_fname)
-
-				# NeRF blends with background colors in sRGB space, rather than first
-				# transforming to linear space, blending there, and then converting back.
-				# (See e.g. the PNG spec for more information on how the `alpha` channel
-				# is always a linear quantity.)
-				# The following lines of code reproduce NeRF's behavior (if enabled in
-				# testbed) in order to make the numbers comparable.
-				if testbed.color_space == ngp.ColorSpace.SRGB and ref_image.shape[2] == 4:
-					# Since sRGB conversion is non-linear, alpha must be factored out of it
-					ref_image[...,:3] = np.divide(ref_image[...,:3], ref_image[...,3:4], out=np.zeros_like(ref_image[...,:3]), where=ref_image[...,3:4] != 0)
-					ref_image[...,:3] = linear_to_srgb(ref_image[...,:3])
-					ref_image[...,:3] *= ref_image[...,3:4]
-					ref_image += (1.0 - ref_image[...,3:4]) * testbed.background_color
-					ref_image[...,:3] = srgb_to_linear(ref_image[...,:3])
+		with tqdm(range(testbed.nerf.training.dataset.n_images), unit="images", desc=f"Rendering test frame") as t:
+			for i in t:
+				resolution = testbed.nerf.training.dataset.metadata[i].resolution
+				testbed.render_ground_truth = True
+				testbed.set_camera_to_training_view(i)
+				ref_image = testbed.render(resolution[0], resolution[1], 1, True)
+				testbed.render_ground_truth = False
+				image = testbed.render(resolution[0], resolution[1], spp, True)
 
 				if i == 0:
-					write_image("ref.png", ref_image)
+					write_image(f"ref.png", ref_image)
+					write_image(f"out.png", image)
 
-				testbed.set_nerf_camera_matrix(np.matrix(frame["transform_matrix"])[:-1,:])
-				image = testbed.render(ref_image.shape[1], ref_image.shape[0], spp, True)
-
-				if i == 0:
-					write_image("out.png", image)
-
-				diffimg = np.absolute(image - ref_image)
-				diffimg[...,3:4] = 1.0
-				if i == 0:
+					diffimg = np.absolute(image - ref_image)
+					diffimg[...,3:4] = 1.0
 					write_image("diff.png", diffimg)
 
 				A = np.clip(linear_to_srgb(image[...,:3]), 0.0, 1.0)
@@ -325,10 +300,11 @@ if __name__ == "__main__":
 
 	if args.video_camera_path:
 		testbed.load_camera_path(args.video_camera_path)
-		testbed.loop_animation = args.video_loop_animation
 
 		resolution = [args.width or 1920, args.height or 1080]
 		n_frames = args.video_n_seconds * args.video_fps
+		save_frames = "%" in args.video_output
+		start_frame, end_frame = args.video_render_range
 
 		if "tmp" in os.listdir():
 			shutil.rmtree("tmp")
@@ -336,8 +312,24 @@ if __name__ == "__main__":
 
 		for i in tqdm(list(range(min(n_frames, n_frames+1))), unit="frames", desc=f"Rendering video"):
 			testbed.camera_smoothing = args.video_camera_smoothing
-			frame = testbed.render(resolution[0], resolution[1], args.video_spp, True, float(i)/n_frames, float(i + 1)/n_frames, args.video_fps, shutter_fraction=0.5)
-			write_image(f"tmp/{i:04d}.jpg", np.clip(frame * 2**args.exposure, 0.0, 1.0), quality=100)
 
-		os.system(f"ffmpeg -y -framerate {args.video_fps} -i tmp/%04d.jpg -c:v libx264 -pix_fmt yuv420p {args.video_output}")
+			if start_frame >= 0 and i < start_frame:
+				# For camera smoothing and motion blur to work, we cannot just start rendering
+				# from middle of the sequence. Instead we render a very small image and discard it
+				# for these initial frames.
+				# TODO Replace this with a no-op render method once it's available
+				frame = testbed.render(32, 32, 1, True, float(i)/n_frames, float(i + 1)/n_frames, args.video_fps, shutter_fraction=0.5)
+				continue
+			elif end_frame >= 0 and i > end_frame:
+				continue
+
+			frame = testbed.render(resolution[0], resolution[1], args.video_spp, True, float(i)/n_frames, float(i + 1)/n_frames, args.video_fps, shutter_fraction=0.5)
+			if save_frames:
+				write_image(args.video_output % i, np.clip(frame * 2**args.exposure, 0.0, 1.0), quality=100)
+			else:
+				write_image(f"tmp/{i:04d}.jpg", np.clip(frame * 2**args.exposure, 0.0, 1.0), quality=100)
+
+		if not save_frames:
+			os.system(f"ffmpeg -y -framerate {args.video_fps} -i tmp/%04d.jpg -c:v libx264 -pix_fmt yuv420p {args.video_output}")
+
 		shutil.rmtree("tmp")

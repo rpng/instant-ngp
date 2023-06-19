@@ -18,21 +18,33 @@
 
 #include <tinylogger/tinylogger.h>
 
-// Eigen uses __device__ __host__ on a bunch of defaulted constructors.
-// This doesn't actually cause unwanted behavior, but does cause NVCC
-// to emit this diagnostic.
-// nlohmann::json produces a comparison with zero in one of its templates,
-// which can also safely be ignored.
 #ifdef __NVCC__
 #  ifdef __NVCC_DIAG_PRAGMA_SUPPORT__
-#    pragma nv_diag_suppress = esa_on_defaulted_function_ignored
 #    pragma nv_diag_suppress = unsigned_compare_with_zero
+#    pragma nv_diag_suppress 20011
+#    pragma nv_diag_suppress 20014
 #  else
-#    pragma diag_suppress = esa_on_defaulted_function_ignored
 #    pragma diag_suppress = unsigned_compare_with_zero
+#    pragma diag_suppress 20011
+#    pragma diag_suppress 20014
 #  endif
 #endif
-#include <Eigen/Dense>
+
+// For glm swizzles to work correctly, Microsoft extensions
+// need to be enabled. This is done by the -fms-extensions
+// flag (see CMakeLists.txt), and the following macro needs
+// to be defined such that GLM is aware of this.
+#ifndef _MSC_EXTENSIONS
+#define _MSC_EXTENSIONS
+#endif
+
+#define GLM_FORCE_SWIZZLE
+#include <glm/glm.hpp>
+#include <glm/gtx/norm.hpp>
+#include <glm/gtc/quaternion.hpp>
+#include <glm/gtx/component_wise.hpp>
+#include <glm/gtc/matrix_access.hpp>
+using namespace glm;
 
 #define NGP_NAMESPACE_BEGIN namespace ngp {
 #define NGP_NAMESPACE_END }
@@ -80,11 +92,6 @@ std::string native_string(const fs::path& path);
 
 bool ends_with(const std::string& str, const std::string& ending);
 bool ends_with_case_insensitive(const std::string& str, const std::string& ending);
-
-using Vector2i32 = Eigen::Matrix<uint32_t, 2, 1>;
-using Vector3i16 = Eigen::Matrix<uint16_t, 3, 1>;
-using Vector4i16 = Eigen::Matrix<uint16_t, 4, 1>;
-using Vector4i32 = Eigen::Matrix<uint32_t, 4, 1>;
 
 enum class EMeshRenderMode : int {
 	Off,
@@ -188,6 +195,11 @@ ETestbedMode mode_from_scene(const std::string& scene);
 ETestbedMode mode_from_string(const std::string& str);
 std::string to_string(ETestbedMode);
 
+enum class EMlpAlgorithm : int {
+	MMA,
+	FMA,
+};
+
 enum class ESDFGroundTruthMode : int {
 	RaytracedMesh,
 	SpheretracedMesh,
@@ -195,10 +207,10 @@ enum class ESDFGroundTruthMode : int {
 };
 
 struct Ray {
-	Eigen::Vector3f o;
-	Eigen::Vector3f d;
+	vec3 o;
+	vec3 d;
 
-	NGP_HOST_DEVICE Eigen::Vector3f operator()(float t) const {
+	NGP_HOST_DEVICE vec3 operator()(float t) const {
 		return o + t * d;
 	}
 
@@ -206,14 +218,14 @@ struct Ray {
 		o += d * t;
 	}
 
-	NGP_HOST_DEVICE float distance_to(const Eigen::Vector3f& p) const {
-		Eigen::Vector3f nearest = p - o;
-		nearest -= d * nearest.dot(d) / d.squaredNorm();
-		return nearest.norm();
+	NGP_HOST_DEVICE float distance_to(const vec3& p) const {
+		vec3 nearest = p - o;
+		nearest -= d * dot(nearest, d) / length2(d);
+		return length(nearest);
 	}
 
 	NGP_HOST_DEVICE bool is_valid() const {
-		return d != Eigen::Vector3f::Zero();
+		return d != vec3(0.0f);
 	}
 
 	static NGP_HOST_DEVICE Ray invalid() {
@@ -222,8 +234,12 @@ struct Ray {
 };
 
 struct TrainingXForm {
-	Eigen::Matrix<float, 3, 4> start;
-	Eigen::Matrix<float, 3, 4> end;
+	bool operator==(const TrainingXForm& other) const {
+		return start == other.start && end == other.end;
+	}
+
+	mat4x3 start;
+	mat4x3 end;
 };
 
 enum class ELensMode : int {
@@ -232,8 +248,13 @@ enum class ELensMode : int {
 	FTheta,
 	LatLong,
 	OpenCVFisheye,
+	Equirectangular,
 };
-static constexpr const char* LensModeStr = "Perspective\0OpenCV\0F-Theta\0LatLong\0OpenCV Fisheye\0\0";
+static constexpr const char* LensModeStr = "Perspective\0OpenCV\0F-Theta\0LatLong\0OpenCV Fisheye\0Equirectangular\0\0";
+
+inline bool supports_dlss(ELensMode mode) {
+	return mode == ELensMode::Perspective || mode == ELensMode::OpenCV || mode == ELensMode::OpenCVFisheye;
+}
 
 struct Lens {
 	ELensMode mode = ELensMode::Perspective;
@@ -341,6 +362,46 @@ private:
 
 	int64_t m_last_progress = 0;
 	std::chrono::time_point<std::chrono::steady_clock> m_creation_time;
+};
+
+template <typename T>
+struct Buffer2DView {
+	T* data = nullptr;
+	ivec2 resolution = ivec2(0);
+
+	// Lookup via integer pixel position (no bounds checking)
+	NGP_HOST_DEVICE T at(const ivec2& xy) const {
+		return data[xy.x + xy.y * resolution.x];
+	}
+
+	// Lookup via UV coordinates in [0,1]^2
+	NGP_HOST_DEVICE T at(const vec2& uv) const {
+		ivec2 xy = clamp(ivec2(vec2(resolution) * uv), ivec2(0), resolution - ivec2(1));
+		return at(xy);
+	}
+
+	// Lookup via UV coordinates in [0,1]^2 and LERP the nearest texels
+	NGP_HOST_DEVICE T at_lerp(const vec2& uv) const {
+		const vec2 xy_float = vec2(resolution) * uv;
+		const ivec2 xy = ivec2(xy_float);
+
+		const vec2 weight = xy_float - vec2(xy);
+
+		auto read_val = [&](ivec2 pos) {
+			return at(clamp(pos, ivec2(0), resolution - ivec2(1)));
+		};
+
+		return (
+			(1 - weight.x) * (1 - weight.y) * read_val({xy.x, xy.y}) +
+			(weight.x) * (1 - weight.y) * read_val({xy.x+1, xy.y}) +
+			(1 - weight.x) * (weight.y) * read_val({xy.x, xy.y+1}) +
+			(weight.x) * (weight.y) * read_val({xy.x+1, xy.y+1})
+		);
+	}
+
+	NGP_HOST_DEVICE operator bool() const {
+		return data;
+	}
 };
 
 uint8_t* load_stbi(const fs::path& path, int* width, int* height, int* comp, int req_comp);
