@@ -14,6 +14,11 @@
 
 #pragma once
 
+#include <opencv2/core/core.hpp>
+#include <opencv2/opencv.hpp>
+
+#include <Eigen/Eigen>
+
 #include <neural-graphics-primitives/adam_optimizer.h>
 #include <neural-graphics-primitives/camera_path.h>
 #include <neural-graphics-primitives/common.h>
@@ -319,6 +324,16 @@ public:
 		const mat4x3& camera_matrix,
 		const vec2& screen_center,
 		const Foveation& foveation
+	);
+
+	cv::Mat render_image_vins(
+		Eigen::Matrix<float, 3, 4> cam_matrix,
+		int width,
+		int height, 
+		int spp, 
+		bool linear, 
+		float shutter_fraction, 
+		bool depth_img
 	);
 
 	void render_frame(

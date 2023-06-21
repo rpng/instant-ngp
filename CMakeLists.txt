@@ -20,10 +20,10 @@ if (NOT NGP_DEPLOY)
 endif()
 
 option(NGP_BUILD_EXECUTABLE "Build instant-ngp.exe?" ON)
-option(NGP_BUILD_WITH_GUI "Build with GUI support (requires GLFW and GLEW)?" ON)
+option(NGP_BUILD_WITH_GUI "Build with GUI support (requires GLFW and GLEW)?" OFF)
 option(NGP_BUILD_WITH_OPTIX "Build with OptiX to enable hardware ray tracing?" ON)
 option(NGP_BUILD_WITH_PYTHON_BINDINGS "Build bindings that allow instrumenting instant-ngp with Python?" ON)
-option(NGP_BUILD_WITH_VULKAN "Build with Vulkan to enable DLSS support?" ON)
+option(NGP_BUILD_WITH_VULKAN "Build with Vulkan to enable DLSS support?" OFF)
 
 set(CMAKE_MODULE_PATH ${CMAKE_MODULE_PATH} ${CMAKE_CURRENT_SOURCE_DIR}/cmake)
 
@@ -91,6 +91,12 @@ set(TCNN_BUILD_BENCHMARK OFF)
 set(TCNN_BUILD_EXAMPLES OFF)
 set(TCNN_ALLOW_CUBLAS_CUSOLVER OFF)
 add_subdirectory(dependencies/tiny-cuda-nn)
+
+find_package(OpenCV 3 QUIET)
+
+if (NOT OpenCV_FOUND)
+	find_package(OpenCV 4 REQUIRED)
+endif ()
 
 set(CMAKE_CUDA_ARCHITECTURES ${TCNN_CUDA_ARCHITECTURES})
 
@@ -202,6 +208,7 @@ endif(NGP_BUILD_WITH_GUI)
 
 list(APPEND NGP_INCLUDE_DIRECTORIES
 	"dependencies"
+	"dependencies/eigen"
 	"dependencies/filesystem"
 	"dependencies/glm"
 	"dependencies/nanovdb"
@@ -334,7 +341,7 @@ target_compile_definitions(ngp PUBLIC ${NGP_DEFINITIONS})
 target_compile_options(ngp PUBLIC $<$<COMPILE_LANGUAGE:CUDA>:${CUDA_NVCC_FLAGS}>)
 target_include_directories(ngp PUBLIC ${NGP_INCLUDE_DIRECTORIES})
 target_link_directories(ngp PUBLIC ${NGP_LINK_DIRECTORIES})
-target_link_libraries(ngp PUBLIC ${NGP_LIBRARIES} tiny-cuda-nn)
+target_link_libraries(ngp PUBLIC ${NGP_LIBRARIES} ${OpenCV_LIBRARIES} tiny-cuda-nn)
 
 # Copy shared libraries to the binary directory as needed
 if (NGP_VULKAN)

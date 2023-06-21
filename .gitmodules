@@ -31,3 +31,6 @@
 [submodule "dependencies/glm"]
 	path = dependencies/glm
 	url = https://github.com/g-truc/glm
+[submodule "dependencies/eigen"]
+	path = dependencies/eigen
+	url = https://github.com/Tom94/eigen/tree/3a8eda017526d00b95296338b0a99010d41c8b05
