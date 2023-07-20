@@ -4287,23 +4287,25 @@ cv::Mat Testbed::render_image_vins(
 			}
 		}
 	}
+	
+	//std::cout<< "cam_matrix nerf: "<< cam_matrix << std::endl;
 
 	// ngp latest version is independent of eigen and need to convert to glm 
-	glm::mat3x4 glmMatrix;
-	for (int row = 0; row < 3; ++row) {
-		for (int col = 0; col < 4; ++col) {
-			glmMatrix[row][col] = cam_matrix(row, col);
-		}
-	}
+	glm::mat4x3 glmMatrix;
+    for (int i = 0; i < 3; ++i) {
+        for (int j = 0; j < 4; ++j) {
+            glmMatrix[j][i] = cam_matrix(i,j);
+        }
+    }
 
 	// std::cout<< "glmMatrix: "<<std::endl;
 	// for (int row = 0; row < 3; ++row) {
-	// 	for (int col = 0; col < 4; ++col) {
-	// 		std::cout<< glmMatrix[row][col]<< ", ";
-	// 	}
-	// 	std::cout<< std::endl;
-	// }
-	// std::cout<< std::endl;
+	//  	for (int col = 0; col < 4; ++col) {
+	//  		std::cout<< glmMatrix[row][col]<< ", ";
+	//  	}
+	//  	std::cout<< std::endl;
+	//  }
+	//  std::cout<< std::endl;
 
 	m_windowless_render_surface.resize({width, height});
     m_windowless_render_surface.reset_accumulation();
@@ -4311,7 +4313,6 @@ cv::Mat Testbed::render_image_vins(
 
     m_fov_axis = 0;
     //set_fov( 1.5747249934813685 * 180 / M_PI);
-
 
     set_nerf_camera_matrix(glmMatrix);
 
