@@ -34,6 +34,8 @@
 #include <opencv2/core/core.hpp>
 #include <opencv2/opencv.hpp>
 
+#include <mutex>
+
 #ifdef NGP_PYTHON
 #  include <pybind11/pybind11.h>
 #  include <pybind11/numpy.h>
@@ -143,6 +145,40 @@ public:
 	public:
 		NerfTracer() {}
 
+		void init_rays_from_camera_parallel(
+			uint32_t spp,
+			uint32_t padded_output_width,
+			uint32_t n_extra_dims,
+			const Eigen::Vector2i& resolution,
+			const Eigen::Vector2f& focal_length,
+			const Eigen::Matrix<float, 3, 4>& camera_matrix0,
+			const Eigen::Matrix<float, 3, 4>& camera_matrix1,
+			const Eigen::Vector4f& rolling_shutter,
+			const Eigen::Vector2f& screen_center,
+			const Eigen::Vector3f& parallax_shift,
+			const Eigen::Vector2i& quilting_dims,
+			bool snap_to_pixel_centers,
+			const BoundingBox& render_aabb,
+			const Eigen::Matrix3f& render_aabb_to_local,
+			float near_distance,
+			float plane_z,
+			float aperture_size,
+			const Lens& lens,
+			const float* envmap_data,
+			const Eigen::Vector2i& envmap_resolution,
+			const float* distortion_data,
+			const Eigen::Vector2i& distortion_resolution,
+			Eigen::Array4f* frame_buffer,
+			Eigen::Array4f* frame_buffer2,
+			float* depth_buffer,
+			float* depth_buffer2,
+			uint8_t* grid,
+			int show_accel,
+			float cone_angle_constant,
+			ERenderMode render_mode,
+			cudaStream_t stream
+		);
+
 		void init_rays_from_camera(
 			uint32_t spp,
 			uint32_t padded_output_width,
@@ -175,6 +211,31 @@ public:
 			cudaStream_t stream
 		);
 
+		uint32_t trace_parallel(
+			NerfNetwork<precision_t>& network,
+			const BoundingBox& render_aabb,
+			const Eigen::Matrix3f& render_aabb_to_local,
+			const BoundingBox& train_aabb,
+			const uint32_t n_training_images,
+			const TrainingXForm* training_xforms,
+			const Eigen::Vector2f& focal_length,
+			float cone_angle_constant,
+			const uint8_t* grid,
+			ERenderMode render_mode,
+			const Eigen::Matrix<float, 3, 4> &camera_matrix,
+			float depth_scale,
+			int visualized_layer,
+			int visualized_dim,
+			ENerfActivation rgb_activation,
+			ENerfActivation density_activation,
+			int show_accel,
+			float min_transmittance,
+			float glow_y_cutoff,
+			int glow_mode,
+			const float* extra_dims_gpu,
+			cudaStream_t stream
+		);
+
 		uint32_t trace(
 			NerfNetwork<precision_t>& network,
 			const BoundingBox& render_aabb,
@@ -200,7 +261,12 @@ public:
 			cudaStream_t stream
 		);
 
-		void enlarge(size_t n_elements, uint32_t padded_output_width, uint32_t n_extra_dims, cudaStream_t stream);
+		void enlarge(size_t n_elements, uint32_t padded_output_width, 
+			uint32_t n_extra_dims, cudaStream_t stream);
+		
+		void enlarge_parallel(size_t n_elements, uint32_t padded_output_width, 
+			uint32_t n_extra_dims, cudaStream_t stream);
+			
 		RaysNerfSoa& rays_hit() { return m_rays_hit; }
 		RaysNerfSoa& rays_init() { return m_rays[0]; }
 		uint32_t n_rays_initialized() const { return m_n_rays_initialized; }
@@ -289,10 +355,12 @@ public:
 		cudaStream_t stream
 	);
 	const float* get_inference_extra_dims(cudaStream_t stream) const;
+	void render_nerf_parallel(CudaRenderBuffer& render_buffer, CudaRenderBuffer& render_buffer2, const Eigen::Vector2i& max_res, const Eigen::Vector2f& focal_length, const Eigen::Matrix<float, 3, 4>& camera_matrix0, const Eigen::Vector2f& screen_center, ERenderMode render_mode_, cudaStream_t stream);
 	void render_nerf(CudaRenderBuffer& render_buffer, const Eigen::Vector2i& max_res, const Eigen::Vector2f& focal_length, const Eigen::Matrix<float, 3, 4>& camera_matrix0, const Eigen::Matrix<float, 3, 4>& camera_matrix1, const Eigen::Vector4f& rolling_shutter, const Eigen::Vector2f& screen_center, cudaStream_t stream);
 	void render_image(CudaRenderBuffer& render_buffer, cudaStream_t stream);
 	cv::Mat linear_to_srgb(cv::Mat img);
-	cv::Mat render_image_vins(Eigen::Matrix<float, 3, 4> cam_matrix, int width, int height, int spp, bool linear, float shutter_fraction, bool depth_img);
+	cv::Mat render_image_vins(Eigen::Matrix<float, 3, 4> cam_matrix, int width, int height, int spp, bool linear, float shutter_fraction, cv::Mat& depth_img);
+	void render_helper(const Eigen::Matrix<float, 3, 4>& camera_matrix0, CudaRenderBuffer& render_buffer, CudaRenderBuffer& render_buffer2, ERenderMode render_mode);
 	void render_frame(const Eigen::Matrix<float, 3, 4>& camera_matrix0, const Eigen::Matrix<float, 3, 4>& camera_matrix1, const Eigen::Vector4f& nerf_rolling_shutter, CudaRenderBuffer& render_buffer, bool to_srgb = true) ;
 	void visualize_nerf_cameras(ImDrawList* list, const Eigen::Matrix<float, 4, 4>& world2proj);
 	fs::path find_network_config(const fs::path& network_config_path);
@@ -878,7 +946,9 @@ public:
 
 	default_rng_t m_rng;
 
+	std::mutex mtx;
 	CudaRenderBuffer m_windowless_render_surface{std::make_shared<CudaSurface2D>()};
+	CudaRenderBuffer m_windowless_render_surface_2{std::make_shared<CudaSurface2D>()};
 
 	uint32_t network_width(uint32_t layer) const;
 	uint32_t network_num_forward_activations() const;

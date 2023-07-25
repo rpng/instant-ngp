@@ -43,19 +43,22 @@ struct RaysNerfSoa {
 #if defined(__NVCC__) || (defined(__clang__) && defined(__CUDA__))
 	void copy_from_other_async(const RaysNerfSoa& other, cudaStream_t stream) {
 		CUDA_CHECK_THROW(cudaMemcpyAsync(rgba, other.rgba, size * sizeof(Eigen::Array4f), cudaMemcpyDeviceToDevice, stream));
+		CUDA_CHECK_THROW(cudaMemcpyAsync(rgba_depth, other.rgba_depth, size * sizeof(Eigen::Array4f), cudaMemcpyDeviceToDevice, stream));
 		CUDA_CHECK_THROW(cudaMemcpyAsync(depth, other.depth, size * sizeof(float), cudaMemcpyDeviceToDevice, stream));
 		CUDA_CHECK_THROW(cudaMemcpyAsync(payload, other.payload, size * sizeof(NerfPayload), cudaMemcpyDeviceToDevice, stream));
 	}
 #endif
 
-	void set(Eigen::Array4f* rgba, float* depth, NerfPayload* payload, size_t size) {
+	void set(Eigen::Array4f* rgba, Eigen::Array4f* rgba_depth, float* depth, NerfPayload* payload, size_t size) {
 		this->rgba = rgba;
+		this->rgba_depth = rgba_depth;
 		this->depth = depth;
 		this->payload = payload;
 		this->size = size;
 	}
 
 	Eigen::Array4f* rgba;
+	Eigen::Array4f* rgba_depth;
 	float* depth;
 	NerfPayload* payload;
 	size_t size;

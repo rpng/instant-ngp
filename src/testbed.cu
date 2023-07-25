@@ -63,6 +63,8 @@
 
 #endif
 
+#include <boost/date_time/posix_time/posix_time.hpp>
+
 // Windows.h is evil
 #undef min
 #undef max
@@ -3234,16 +3236,21 @@ cv::Mat Testbed::linear_to_srgb(cv::Mat img) {
     return img_srgb;
 }
 
-cv::Mat Testbed::render_image_vins(Eigen::Matrix<float, 3, 4> cam_matrix, int width, int height, int spp, bool linear, float shutter_fraction, bool depth_img) {
+cv::Mat Testbed::render_image_vins(Eigen::Matrix<float, 3, 4> cam_matrix, int width, int height, int spp, bool linear, 
+	float shutter_fraction, cv::Mat& depth_img) {
 	m_windowless_render_surface.resize({width, height});
+	m_windowless_render_surface_2.resize({width, height});
     m_windowless_render_surface.reset_accumulation();
+	m_windowless_render_surface_2.reset_accumulation();
+
     float end_time = -1.0; float start_time = -1.0;
 
     m_fov_axis = 0;
     //set_fov( 1.5747249934813685 * 180 / M_PI);
 	
 	// negate the y and z axis
-	std::cout<<"render image vins"<<std::endl; 
+	// std::cout<<"render image vins"<<std::endl; 
+	// std::cout<< "cam_matrix: "<< cam_matrix << std::endl;
 	for (int m = 0; m < 3; ++m) {
 		for (int n = 0; n < 4; ++n) {
 			if (n == 1 || n == 2) {  // check if column is y or z
@@ -3254,6 +3261,7 @@ cv::Mat Testbed::render_image_vins(Eigen::Matrix<float, 3, 4> cam_matrix, int wi
 
     set_nerf_camera_matrix(cam_matrix);
     
+	auto rT1 = boost::posix_time::microsec_clock::local_time();
 	if (end_time < 0.f) {
 		end_time = start_time;
 	}
@@ -3270,103 +3278,103 @@ cv::Mat Testbed::render_image_vins(Eigen::Matrix<float, 3, 4> cam_matrix, int wi
 
 	auto start_cam_matrix = m_smoothed_camera;
 	auto end_cam_matrix = m_smoothed_camera;
+	auto rT2 = boost::posix_time::microsec_clock::local_time();
 
-	if (depth_img) {
-		m_render_mode = ERenderMode::Depth;
-	}
-	else {
-		m_render_mode = ERenderMode::Shade;
-	}
-    for (int i = 0; i < spp; ++i) {
-        float start_alpha = ((float)i)/(float)spp * shutter_fraction;
-        float end_alpha = ((float)i + 1.0f)/(float)spp * shutter_fraction;
+	//std::cout<< "Setting matrices took: "<< (rT2 - rT1).total_microseconds()  <<std::endl;
 
-        auto sample_start_cam_matrix = start_cam_matrix;
-        auto sample_end_cam_matrix = ngp::log_space_lerp(start_cam_matrix, end_cam_matrix, shutter_fraction);
-
-        if (m_autofocus) {
-            autofocus();
-        }
-
-        render_frame(sample_start_cam_matrix, sample_end_cam_matrix, Eigen::Vector4f::Zero(), m_windowless_render_surface, false);
-    }
-    m_smoothed_camera = end_cam_matrix;
-
-	cv::Mat img(height, width, CV_32FC4);
-	CUDA_CHECK_THROW(cudaMemcpy2DFromArray(img.ptr<float4>(), img.step, m_windowless_render_surface.surface_provider().array(), 0, 0, width * sizeof(float) * 4, height, cudaMemcpyDeviceToHost));
-	cv::Mat bgr_img;
-	if (depth_img) {
-		//std::cout<< "depth im size: "<< img.size() << std::endl;
-		cv::Mat img_copy = img.clone();
-		cv::cvtColor(img_copy, bgr_img, cv::COLOR_RGBA2GRAY);
-		bgr_img.convertTo(bgr_img, CV_32F);
-	}
-	else {
-		cv::Mat img_copy = img.clone();
-		cv::cvtColor(img_copy, bgr_img, cv::COLOR_RGBA2BGR);
-		bgr_img.convertTo(bgr_img, CV_8UC3, 255.0);
-	}
-
-	//std::cout<< "bgr image shape: "<< bgr_img.size() << std::endl;
-	//cv::imwrite("/media/saimouli/RPNG_FLASH_4/datasets/ar_table/table_01_sample/test.jpg", bgr_img);
-
-	// //trying to divide the alpha channel 
-	// cv::Mat img_srgb;
-	// std::vector<cv::Mat> channels;
-	// cv::split(img_exp, channels);
-
-	// cv::Mat alpha = channels[3];
-
-	// std::vector<cv::Mat> merged_channels = {channels[0], channels[1], channels[2]};
-	// cv::Mat merged_img;
-	// cv::merge(merged_channels, merged_img); // merge the channels back into an image
-
-
-	// cv::Mat channels_rgb = cv::Mat::zeros(channels[0].size(), CV_32FC3);
-	// for (int i = 0; i < channels[0].rows; ++i) {
-	// 	for (int j = 0; j < channels[0].cols; ++j) {
-	// 		float a = alpha.at<float>(i, j);
-	// 		if (a != 0) {
-	// 			channels_rgb.at<cv::Vec3f>(i, j)[0] = channels[0].at<cv::Vec3f>(i, j)[0]/a ;
-	// 			channels_rgb.at<cv::Vec3f>(i, j)[1] = channels[1].at<cv::Vec3f>(i, j)[1]/a ;
-	// 			channels_rgb.at<cv::Vec3f>(i, j)[2] = channels[2].at<cv::Vec3f>(i, j)[2]/a ;
-	// 		}
-	// 	}
+	rT1 = boost::posix_time::microsec_clock::local_time();
+	// if (depth_img) {
+	// 	m_render_mode = ERenderMode::Depth;
+	// }
+	// else {
+	// 	m_render_mode = ERenderMode::Shade;
 	// }
 
-	// cv::Mat srgb_lin = linear_to_srgb(merged_img);
-	// cv::Mat bgr_img_test;
-	// cv::cvtColor(srgb_lin, bgr_img_test, cv::COLOR_RGB2BGR);
-	// bgr_img_test.convertTo(bgr_img_test, CV_8UC3, 255.0);
-	// std::cout<< "bgr_img_test image shape: "<< bgr_img_test.size() << std::endl;
-	// cv::imwrite("/media/saimouli/RPNG_FLASH_4/datasets/ar_table/table_01_sample/test_alpha_cv.jpg", bgr_img_test);
+	// render depth and rgb in parallel
+	// const int num_threads = 1;
+	// std::vector<std::future<void>> threads;
 
-	// // GPU render 
-	// Vector2i res = m_windowless_render_surface.out_resolution();
-	// const dim3 threads = { 16, 8, 1 };
-	// const dim3 blocks = { div_round_up((uint32_t)res.x(), threads.x), div_round_up((uint32_t)res.y(), threads.y), 1 };
+	// threads.push_back(std::async(std::launch::async, &Testbed::render_helper, 
+	// 	this, start_cam_matrix, std::ref(m_windowless_render_surface), 
+	// 	ERenderMode::Shade));
 	
-	// GPUMemory<uint8_t> image_data(res.prod() * 3);
-	// to_8bit_color_kernel<<<blocks, threads>>>(
-	// 	res,
-	// 	EColorSpace::SRGB, // the GUI always renders in SRGB
-	// 	m_windowless_render_surface.surface(),
-	// 	image_data.data()
-	// );
-		
-	// std::vector<uint8_t> cpu_image_data(image_data.size());
-	// CUDA_CHECK_THROW(cudaMemcpy(cpu_image_data.data(), image_data.data(), image_data.bytes(), cudaMemcpyDeviceToHost));
-	// write_stbi("/media/saimouli/RPNG_FLASH_4/datasets/ar_table/table_01_sample/alpha_test.jpg", res.x(), res.y(), 3, cpu_image_data.data(), 100);
+	// // threads.push_back(std::async(std::launch::async, &Testbed::render_helper, 
+	// // 	this, start_cam_matrix, std::ref(m_windowless_render_surface_2), 
+	// // 	ERenderMode::Depth));
 
-	// m_render_futures.emplace_back(m_thread_pool.enqueue_task([image_data=std::move(image_data), frame_idx=m_camera_path.render_frame_idx++, res, "/media/saimouli/RPNG_FLASH_4/datasets/ar_table/table_01_sample/"] {
-	// 	std::vector<uint8_t> cpu_image_data(image_data.size());
-	// 	CUDA_CHECK_THROW(cudaMemcpy(cpu_image_data.data(), image_data.data(), image_data.bytes(), cudaMemcpyDeviceToHost));
-	// 	write_stbi("/media/saimouli/RPNG_FLASH_4/datasets/ar_table/table_01_sample/alpha_test.jpg", res.x(), res.y(), 3, cpu_image_data.data(), 100);
-	// }));
+    // // Wait for all threads to finish
+    // for (auto& thread : threads) {
+    //     thread.wait();
+    // }
+
+	render_helper(start_cam_matrix, m_windowless_render_surface, m_windowless_render_surface_2, ERenderMode::Shade);
+
+
+	rT2 = boost::posix_time::microsec_clock::local_time();
+	std::cout<< "Rendering took [ms]: "<< (rT2 - rT1).total_microseconds() * 1e-3  <<std::endl;
+
+	rT1 = boost::posix_time::microsec_clock::local_time();
+	cv::Mat img(height, width, CV_32FC4);
+	cv::Mat img2(height, width, CV_32FC4);
+
+	CUDA_CHECK_THROW(cudaMemcpy2DFromArray(img.ptr<float4>(), img.step, m_windowless_render_surface.surface_provider().array(), 0, 0, width * sizeof(float) * 4, height, cudaMemcpyDeviceToHost));
+	CUDA_CHECK_THROW(cudaMemcpy2DFromArray(img2.ptr<float4>(), img2.step, m_windowless_render_surface_2.surface_provider().array(), 0, 0, width * sizeof(float) * 4, height, cudaMemcpyDeviceToHost));
+	cv::Mat bgr_img;
+	
+	cv::Mat img_copy;
+
+	// depth img
+	img_copy = img2.clone();
+	cv::cvtColor(img_copy, depth_img, cv::COLOR_RGBA2GRAY);
+	depth_img.convertTo(depth_img, CV_32F);
+	// cv::cvtColor(img_copy, depth_img, cv::COLOR_RGBA2BGR);
+	// depth_img.convertTo(depth_img, CV_8UC3, 255.0);
+
+	// rgb image
+	img_copy = img.clone();
+	cv::cvtColor(img_copy, bgr_img, cv::COLOR_RGBA2BGR);
+	bgr_img.convertTo(bgr_img, CV_8UC3, 255.0);
+	// cv::cvtColor(img_copy, bgr_img, cv::COLOR_RGBA2GRAY);
+	// bgr_img.convertTo(bgr_img, CV_32F);
+
+	rT2 = boost::posix_time::microsec_clock::local_time();
+	std::cout<< "Convert to img took [ms]: "<< (rT2 - rT1).total_microseconds()* 1e-3  <<std::endl;
+
 	return bgr_img;
 }
 
-void Testbed::render_frame(const Matrix<float, 3, 4>& camera_matrix0, const Matrix<float, 3, 4>& camera_matrix1, const Vector4f& nerf_rolling_shutter, CudaRenderBuffer& render_buffer, bool to_srgb) {
+void Testbed::render_helper(const Matrix<float, 3, 4>& camera_matrix0, 
+	CudaRenderBuffer& render_buffer, CudaRenderBuffer& render_buffer2, 
+	ERenderMode render_mode) {
+	
+	Vector2i max_res = m_window_res.cwiseMax(render_buffer.in_resolution());
+	render_buffer.clear_frame(m_stream.get());
+	render_buffer2.clear_frame(m_stream.get());
+
+	Vector2f focal_length = calc_focal_length(render_buffer.in_resolution(), m_fov_axis, m_zoom);
+	Vector2f screen_center = render_screen_center();
+
+	// render_nerf(render_buffer, max_res, focal_length, camera_matrix0, 
+	// 	camera_matrix0, Eigen::Vector4f::Zero(), screen_center, m_stream.get());
+	// std::cout<< "render_helper"<<std::endl;
+	render_nerf_parallel(render_buffer, render_buffer2, max_res, focal_length, camera_matrix0, 
+		screen_center, render_mode, m_stream.get());
+
+	render_buffer.set_color_space(m_color_space);
+	render_buffer.set_tonemap_curve(m_tonemap_curve);
+	render_buffer.accumulate(m_exposure, m_stream.get());
+	render_buffer.tonemap(m_exposure, m_background_color, EColorSpace::Linear, m_stream.get());
+
+	render_buffer2.set_color_space(m_color_space);
+	render_buffer2.set_tonemap_curve(m_tonemap_curve);
+	render_buffer2.accumulate(m_exposure, m_stream.get());
+	render_buffer2.tonemap(m_exposure, m_background_color, EColorSpace::Linear, m_stream.get());
+
+	CUDA_CHECK_THROW(cudaStreamSynchronize(m_stream.get()));
+}
+
+void Testbed::render_frame(const Matrix<float, 3, 4>& camera_matrix0, const Matrix<float, 3, 4>& camera_matrix1, 
+	const Vector4f& nerf_rolling_shutter, CudaRenderBuffer& render_buffer, bool to_srgb) {
 	//tlog::info()<< "render_frame_comment";
 	Vector2i max_res = m_window_res.cwiseMax(render_buffer.in_resolution());
 
@@ -3383,6 +3391,7 @@ void Testbed::render_frame(const Matrix<float, 3, 4>& camera_matrix0, const Matr
 		case ETestbedMode::NerfSlam:
 		case ETestbedMode::Nerf:
 			if (!m_render_ground_truth || m_ground_truth_alpha < 1.0f) {
+				std::cout<< "render nerf" <<std::endl;
 				render_nerf(render_buffer, max_res, focal_length, camera_matrix0, camera_matrix1, nerf_rolling_shutter, screen_center, m_stream.get());
 			}
 			break;
