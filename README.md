@@ -40,7 +40,7 @@ export LD_LIBRARY_PATH="/usr/local/cuda-11.4/lib64:$LD_LIBRARY_PATH"
 
 Begin by cloning this repository and all its submodules using the following command:
 ```sh
-$ git clone --recursive https://github.com/nvlabs/instant-ngp
+$ git clone --recursive https://github.com/rpng/instant-ngp
 $ cd instant-ngp
 ```
 
@@ -63,104 +63,6 @@ If automatic GPU architecture detection fails, (as can happen if you have multip
 
 
 
-## Interactive training and rendering
-
-<img src="docs/assets_readme/testbed.png" width="100%"/>
-
-This codebase comes with an interactive GUI that includes many features beyond our academic publication:
-- Additional training features, such as extrinsics and intrinsics optimization.
-- Marching cubes for `NeRF->Mesh` and `SDF->Mesh` conversion.
-- A spline-based camera path editor to create videos.
-- Debug visualizations of the activations of every neuron input and output.
-- And many more task-specific settings.
-- See also our [one minute demonstration video of the tool](https://nvlabs.github.io/instant-ngp/assets/mueller2022instant.mp4).
-
-Let's start using __instant-ngp__; more information about the GUI and other scripts follow these test scenes.
-
-### NeRF fox
-
-One test scene is provided in this repository, using a small number of frames from a casually captured phone video.
-Simply start `instant-ngp` and drag the `data/nerf/fox` folder into the GUI. Or, alternatively, use the command line:
-
-```sh
-instant-ngp$ ./instant-ngp data/nerf/fox
-```
-
-On Windows you need to reverse the slashes here (and below), i.e.:
-
-```sh
-instant-ngp> .\instant-ngp data\nerf\fox
-```
-
-<img src="docs/assets_readme/fox.png"/>
-
-Alternatively, download any NeRF-compatible scene (e.g. from the [NeRF authors' drive](https://drive.google.com/drive/folders/1JDdLGDruGNXWnM1eqY1FNL9PlStjaKWi), the [SILVR dataset](https://github.com/IDLabMedia/large-lightfields-dataset), or the [DroneDeploy dataset](https://github.com/nickponline/dd-nerf-dataset)).
-Now you can run:
-
-```sh
-instant-ngp$ ./instant-ngp data/nerf_synthetic/lego/transforms_train.json
-```
-
-**[To prepare your own dataset for use with our NeRF implementation, click here.](docs/nerf_dataset_tips.md)** See also [this video](https://www.youtube.com/watch?v=3TWxO1PftMc) for a guided walkthrough.
-
-### SDF armadillo
-
-Drag `data/sdf/armadillo.obj` into the GUI or use the command:
-
-```sh
-instant-ngp$ ./instant-ngp data/sdf/armadillo.obj
-```
-
-<img src="docs/assets_readme/armadillo.png"/>
-
-### Image of Einstein
-
-Drag `data/image/albert.exr` into the GUI or use the command:
-
-```sh
-instant-ngp$ ./instant-ngp data/image/albert.exr
-```
-
-<img src="docs/assets_readme/albert.png"/>
-
-To reproduce the gigapixel results, download, for example, [the Tokyo image](https://www.flickr.com/photos/trevor_dobson_inefekt69/29314390837) and convert it to `.bin` using the `scripts/convert_image.py` script. This custom format improves compatibility and loading speed when resolution is high. Now you can run:
-
-```sh
-instant-ngp$ ./instant-ngp data/image/tokyo.bin
-```
-
-
-### Volume renderer
-
-Download the [nanovdb volume for the Disney cloud](https://drive.google.com/drive/folders/1SuycSAOSG64k2KLV7oWgyNWyCvZAkafK?usp=sharing), which is derived [from here](https://disneyanimation.com/data-sets/?drawer=/resources/clouds/) ([CC BY-SA 3.0](https://media.disneyanimation.com/uploads/production/data_set_asset/6/asset/License_Cloud.pdf)).
-
-Then drag `wdas_cloud_quarter.nvdb` into the GUI or use the command:
-
-```sh
-instant-ngp$ ./instant-ngp wdas_cloud_quarter.nvdb
-```
-<img src="docs/assets_readme/cloud.png"/>
-
-
-
-## Thanks
-
-Many thanks to [Jonathan Tremblay](https://research.nvidia.com/person/jonathan-tremblay) and [Andrew Tao](https://developer.nvidia.com/blog/author/atao/) for testing early versions of this codebase and to Arman Toorians and Saurabh Jain for the factory robot dataset.
-We also thank [Andrew Webb](https://github.com/grey-area) for noticing that one of the prime numbers in the spatial hash was not actually prime; this has been fixed since.
-
-This project makes use of a number of awesome open source libraries, including:
-* [tiny-cuda-nn](https://github.com/NVlabs/tiny-cuda-nn) for fast CUDA networks and input encodings
-* [tinyexr](https://github.com/syoyo/tinyexr) for EXR format support
-* [tinyobjloader](https://github.com/tinyobjloader/tinyobjloader) for OBJ format support
-* [stb_image](https://github.com/nothings/stb) for PNG and JPEG support
-* [Dear ImGui](https://github.com/ocornut/imgui) an excellent immediate mode GUI library
-* [Eigen](https://eigen.tuxfamily.org/index.php?title=Main_Page) a C++ template library for linear algebra
-* [pybind11](https://github.com/pybind/pybind11) for seamless C++ / Python interop
-* and others! See the `dependencies` folder.
-
-Many thanks to the authors of these brilliant projects!
-
-## License and Citation
 
 ```bibtex
 @article{mueller2022instant,
