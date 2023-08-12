@@ -3243,7 +3243,6 @@ cv::Mat Testbed::render_image_vins(Eigen::Matrix<float, 3, 4> cam_matrix, int wi
     //set_fov( 1.5747249934813685 * 180 / M_PI);
 	
 	// negate the y and z axis
-	std::cout<<"render image vins"<<std::endl; 
 	for (int m = 0; m < 3; ++m) {
 		for (int n = 0; n < 4; ++n) {
 			if (n == 1 || n == 2) {  // check if column is y or z
