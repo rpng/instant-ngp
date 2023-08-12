@@ -21,8 +21,9 @@ from common import *
 from scenes import *
 
 from tqdm import tqdm
-import time 
-
+import time
+pyngp_path = ".\instant-ngp\build"
+sys.path.append(pyngp_path)
 import pyngp as ngp # noqa
 
 def parse_args():

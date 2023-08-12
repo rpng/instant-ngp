@@ -134,6 +134,12 @@ void Testbed::load_training_data(const fs::path& path) {
 
 	// Automatically determine the mode from the first scene that's loaded
 	std::cout<< "path.str: "<< path.str() << std::endl;
+
+	std::cout << "m_nerf.training.optimize_extrinsics: " << m_nerf.training.optimize_extrinsics << std::endl;
+	std::cout << "m_nerf.training.optimize_distortion: " << m_nerf.training.optimize_distortion << std::endl;
+	std::cout << "m_nerf.training.optimize_extra_dims: " << m_nerf.training.optimize_extra_dims << std::endl;
+	std::cout << "m_nerf.training.optimize_focal_length: " << m_nerf.training.optimize_focal_length << std::endl;
+	std::cout << "m_nerf.training.optimize_exposure: " << m_nerf.training.optimize_exposure << std::endl;
 	ETestbedMode scene_mode = mode_from_scene(path.str());
 	if (scene_mode == ETestbedMode::None) {
 		throw std::runtime_error{fmt::format("Unknown scene format for path '{}'.", path.str())};

@@ -1634,8 +1634,8 @@ __global__ void compute_cam_gradient_train_nerf(
 	uint32_t ray_idx = ray_indices_in[i];
 	uint32_t img = image_idx(ray_idx, n_rays, n_rays_total, n_training_images, cdf_img);
 
-	if (i == 0)
-		printf("[compute_loss_kernel_train_nerf tid:%d] n_training_images: %d img: %d\n", i, n_training_images, img);
+//	if (i == 0)
+//		printf("[compute_loss_kernel_train_nerf tid:%d] n_training_images: %d img: %d\n", i, n_training_images, img);
 
 	Eigen::Vector2i resolution = metadata[img].resolution;
 

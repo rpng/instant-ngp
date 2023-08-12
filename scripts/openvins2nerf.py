@@ -12,6 +12,7 @@ from scipy.spatial.transform import Rotation as R
 from scipy.spatial.transform import Slerp
 from scipy.interpolate import CubicSpline
 import matplotlib.pyplot as plt
+import shutil
 
 cam2wld_traj = []
 wld2cam_traj = []
@@ -19,25 +20,23 @@ wld2cam_traj = []
 class Options:
     def __init__(self, args):
         # Sanity check
-        if len(args) < 6:
+        if len(args) < 8:
             print ('You need to pass the rosbag file path: python3 openvins2nerf.py PATH_TO_GROUNDTRUTH PATH_TO_ROSBAG IMAGE_TOPIC INTRINSIC_TOPIC, GROUNDTRUTH_TOPIC')
             exit(0)
 
+        self.intrinsic = []
         self.groundtruth_path = args[1]
         self.rosbag_path = args[2]
-        rosbag_name = os.path.splitext(os.path.basename(self.rosbag_path))[0]
-        rosbag_dir = os.path.dirname(self.rosbag_path)
-        self.out_img_dir = rosbag_dir + "/" + rosbag_name + "/images"
-        self.json_path = rosbag_dir + "/" + rosbag_name + "/transforms_vicon.json"
         self.image_topic = args[3]
         self.intrinsic_topic = args[4]
-        self.groundtruth_topic = args[5]
-        self.intrinsic = []
-        self.kf_time = 1
-        self.start_time = 5
-        self.end_time = 64
-        self.interpolate_cubic_poses_flag = False
-        self.interpolate_linear_poses = False
+        self.T_ItoC = np.array(list(np.float_(args[5].split(",")))).reshape(4,4)  # T_CtoI ? T_ItoC ?
+        self.json_path = args[6]
+        self.srp_thr = float(args[7])
+        self.ori_thr = float(args[8])
+        self.pos_thr = float(args[9])
+        rosbag_name = os.path.splitext(os.path.basename(self.rosbag_path))[0]
+        rosbag_dir = os.path.dirname(self.rosbag_path)
+        self.out_img_dir = rosbag_dir + "/" + rosbag_name + "/images_s" + args[7] + "_o" + args[8] + "_p" + args[9]
 
         # Sanity check of the files
         if not os.path.exists(self.groundtruth_path):
@@ -57,8 +56,9 @@ class Options:
             exit(0)
 
         # Create the output image path if not exist
-        if not os.path.exists(self.out_img_dir):
-            os.makedirs(self.out_img_dir)
+        if os.path.exists(self.out_img_dir):
+            shutil.rmtree(self.out_img_dir)
+        os.makedirs(self.out_img_dir)
 
 class Pose:
     def __init__(self, x, y, z, x_orient, y_orient, z_orient, w_orient):
@@ -88,6 +88,45 @@ def ros_to_pose_matrix(pose):
     T_wld2imu = np.hstack((R_ItoG, p_IinG))
     return T_wld2imu
 
+def log_so3(R):
+    # note switch to base 1
+    R11 = R[0, 0]
+    R12 = R[0, 1]
+    R13 = R[0, 2]
+    R21 = R[1, 0]
+    R22 = R[1, 1]
+    R23 = R[1, 2]
+    R31 = R[2, 0]
+    R32 = R[2, 1]
+    R33 = R[2, 2]
+
+    # Get trace(R)
+    tr = R.trace();
+    omega = [];
+
+    # when trace == -1, i.e., when theta = +-pi, +-3pi, +-5pi, etc.
+    # we do something special
+    if tr + 1.0 < 1e-10:
+        if np.abs(R33 + 1.0) > 1e-5:
+            omega = (np.pi / np.sqrt(2.0 + 2.0 * R33)) * np.array([R13, R23, 1.0 + R33]).reshape(3,1)
+        elif np.abs(R22 + 1.0) > 1e-5:
+           omega = (np.pi / np.sqrt(2.0 + 2.0 * R22)) * np.array([R12, 1.0 + R22, R32]).reshape(3,1)
+        else:
+            omega = (np.pi / np.sqrt(2.0 + 2.0 * R11)) * np.array([1.0 + R11, R21, R31]).reshape(3,1)
+    else:
+        magnitude = []
+    tr_3 = tr - 3.0; # always negative
+    if tr_3 < -1e-7:
+        if tr < -1:
+            tr = -1
+        theta = np.arccos((tr - 1.0) / 2.0);
+        magnitude = theta / (2.0 * np.sin(theta))
+    else:
+        magnitude = 0.5 - tr_3 / 12.0
+    omega = magnitude * np.array([R32 - R23, R13 - R31, R21 - R12]).reshape(3,1)
+
+    return omega;
+
 def plot_trajectory():
     fig, (ax2, ax3) = plt.subplots(2, 1, figsize=(8, 12))
     
@@ -105,18 +144,12 @@ def plot_trajectory():
 
     plt.show()
 
-def compute_poses_to_plot(pose):
+def compute_poses_to_plot(options, pose):
     R_ItoG = pose[:3, :3]
     p_IinG = pose[:3, 3].reshape([3, 1]) #in reality it is p_IinG
-
-    # rigid transformation from cam2imu
-    T_CtoI = np.array([[0.9999654398038452, 0.007342326779113337, -0.003899927610975742, -0.027534314618518095],
-              [-0.0073452195116216765, 0.9999727585590525, -0.0007279355223411334, -0.0030587146933711722],
-              [0.0038944766308488753, 0.0007565561891287445, 0.9999921303062861, -0.023605118842939803],
-              [0.0, 0.0, 0.0, 1.0]])
     
-    p_IinC = T_CtoI[:3, 3] #in reality it is p_IinC
-    R_ItoC = T_CtoI[:3, :3] #in reality it is R_ItoC
+    p_IinC = options.T_ItoC[:3, 3] #in reality it is p_IinC
+    R_ItoC = options.T_ItoC[:3, :3] #in reality it is R_ItoC
 
     #adjustments
     p_GinI = -R_ItoG.transpose() @ p_IinG
@@ -136,32 +169,22 @@ from pyquaternion import Quaternion
 
 # qw_str, qx_str, qy_str, qz_str, tx_str, ty_str, tz_str, camera_id_str, img_name;
 #NOTE: Values are hardcoded for rpng table dataset
-def write_image_and_pose(image, pose, output_dir, counter, up):
+def write_image_and_pose(image, pose, options, counter, up):
     # Get the timestamp from the pose message
     # timestamp = pose.header.stamp.to_sec()
     # Convert the image message to a cv2 image
     image = CvBridge().imgmsg_to_cv2(image, "bgr8")
     # Construct the file names
-    image_file = os.path.join(output_dir, f"frame_{counter}.png")
+    image_file = os.path.join(options.out_img_dir, f"frame_{counter}.png")
 
     bottom = np.array([0.0, 0.0, 0.0, 1.0]).reshape([1, 4])
     
     sharp_img = sharpness(image)
-    print(image_file, "sharpness=", sharp_img)
-    #tvec = np.array([pose.position.x, pose.position.y, pose.position.z])
-    #qvec = np.array([pose.orientation.x, pose.orientation.y,
-    #                pose.orientation.z, pose.orientation.w])  # x,y,z,w
     R_ItoG = np.array(pose[:3, :3])
-    p_IinG = pose[:3, 3].reshape([3, 1]) #in reality it is p_IinG 
- 
-    # rigid transformation from cam2imu
-    T_ItoC = np.array([[0.9999654398038452, 0.007342326779113337, -0.003899927610975742, -0.027534314618518095],
-              [-0.0073452195116216765, 0.9999727585590525, -0.0007279355223411334, -0.0030587146933711722],
-              [0.0038944766308488753, 0.0007565561891287445, 0.9999921303062861, -0.023605118842939803],
-              [0.0, 0.0, 0.0, 1.0]])
-    
-    p_IinC = T_ItoC[:3, 3] #in reality it is p_IinC
-    R_ItoC = T_ItoC[:3, :3] #in reality it is R_ItoC
+    p_IinG = pose[:3, 3].reshape([3, 1]) #in reality it is p_IinG
+
+    p_IinC = options.T_ItoC[:3, 3].reshape([3,1]) #in reality it is p_IinC
+    R_ItoC = options.T_ItoC[:3, :3] #in reality it is R_ItoC
 
     p_GinI = -R_ItoG.transpose() @ p_IinG
     R_CtoI = R_ItoC.transpose()
@@ -280,236 +303,101 @@ def interpolate_cubic_spline_poses(timestamps, poses):
     return desired_poses_dict 
 
 def read_bag(options):
-    first_pose = True
-    first_pose_gt = True
-    time_temp_gt = 0
-    up = np.zeros(3)
-    frames_counter = 0
+    # Read the ground truth file
     pose_gt_dict = {}
     timestamps_gt = []; poses_gt = []
-    if options.groundtruth_path is not None:
-        with open(options.groundtruth_path, "r") as f:
-            next(f)
-            for line in f: 
-                data = line.split()
-                timestamps_gt.append(float(data[0]))
-                poses_gt.append([float(x) for x in data[1:]])
-    
+    totoal_cnt = 0
+    sharp_rej = 0;
+    pose_rej = 0;
+    pass_cnt = 0;
+    with open(options.groundtruth_path, "r") as f:
+        next(f)
+        for line in f:
+            line = line.strip()
+            data = line.split(" ")
+            timestamps_gt.append(float(data[0]))
+            poses_gt.append([float(x) for x in data[1:]])
+            timestamp = float(data[0])
+            x_pos = float(data[1])
+            y_pos = float(data[2])
+            z_pos = float(data[3])
+            x_orient = float(data[4])
+            y_orient = float(data[5])
+            z_orient = float(data[6])
+            w_orient = float(data[7])
+            pose = Pose(x_pos, y_pos, z_pos, x_orient, y_orient, z_orient, w_orient)
+            pose_gt_dict[timestamp] = pose
     timestamps_gt = np.array(timestamps_gt)
     poses_gt = np.array(poses_gt)
+    # print("Finish reading ground truth.")
 
-    if options.groundtruth_path is not None:
-        print("Reading gt file")
-        with open(options.groundtruth_path) as f:
-            next(f) # skip first line assuming it will always be a comment 
-            for line in f:
-                line = line.strip()
-                data = line.split(" ")
-                timestamp = float(data[0])
-                x_pos = float(data[1])
-                y_pos = float(data[2])
-                z_pos = float(data[3])
-                x_orient = float(data[4])
-                y_orient = float(data[5])
-                z_orient = float(data[6])
-                w_orient = float(data[7])
-                pose = Pose(x_pos, y_pos, z_pos, x_orient, y_orient, z_orient, w_orient)
-                pose_gt_dict[timestamp] = pose
-                # if (first_pose_gt == True):
-                #     time_temp_gt = timestamp
-                #     first_pose_gt = False
 
-                # if timestamp - time_temp_gt >= kf_time:
-                #     x_pos = float(data[1])
-                #     y_pos = float(data[2])
-                #     z_pos = float(data[3])
-                #     x_orient = float(data[4])
-                #     y_orient = float(data[5])
-                #     z_orient = float(data[6])
-                #     w_orient = float(data[7])
-                #     pose = Pose(x_pos, y_pos, z_pos, x_orient, y_orient, z_orient, w_orient)
-                #     pose_gt_dict[timestamp] = pose
-                #     time_temp_gt = timestamp
-
-    print("Reading bag, hold tight!")
+    first_pose = True
+    frames_counter = 0
+    up = np.zeros(3)
+    # print("Reading bag, hold tight!")
     time_temp = 0
-    first_pose_topic = True
+    poses_used = [];
     # Open the ROS bag
     with rosbag.Bag(options.rosbag_path, "r") as bag:
-        # Create a bridge for converting image messages
-        bridge = CvBridge()
-        # Initialize the dictionaries for storing image and pose messages
+
+                # Get the poses
+        pose_dict = pose_gt_dict
+        
+        # Read all the imaes
         image_dict = {}
-        pose_dict = {}
-        
-        # Read the messages from the bag
+        bridge = CvBridge() # Create a bridge for converting image messages
         for topic, msg, t in bag.read_messages():
-            if first_pose == True:
-                start_pose_time = t.to_sec()
-                first_pose = False
+            if topic == options.image_topic:
+                totoal_cnt += 1
+                # skip if image is very blurry
+                if sharpness(bridge.imgmsg_to_cv2(msg, "bgr8")) < options.srp_thr:
+                    sharp_rej += 1
+                    continue;
+                image_dict[msg.header.stamp.to_sec()] = msg
 
-            # check if within the provided time range
-            if options.start_time <= t.to_sec() - start_pose_time <= options.end_time:
-                ##print(t.to_sec() - start_pose_time)
-                if topic == "/d455/color/image_raw":
-                    # Store the image message in the dictionary
-                    image_dict[msg.header.stamp.to_sec()] = msg
-                elif topic == options.groundtruth_topic:
-                    if first_pose_topic:
-                        time_temp = t.to_sec()
-                        first_pose_topic = False
-                    # storing key frame logic here because poses are higher hz
-                    # select a pose for every 1 sec
-                    #if t.to_sec() - time_temp >= kf_time:
-                        #print(t.to_sec() - time_temp)
-                        #time_temp = t.to_sec()
-                        # Store the pose message in the dictionary
-                        pose_dict[msg.header.stamp.to_sec()] = msg.pose.pose
-                        frames_counter+= 1
-                    
+        # print("# of poses: ", len(pose_dict))
+        # print("# of imges: ", len(image_dict))
 
-            # break the loop if the time is out of range
-            elif options.end_time  <= t.to_sec() - start_pose_time:
-                break
-        
-        if options.groundtruth_path is not None:
-            pose_dict = pose_gt_dict
 
-        print("pose len: ", len(pose_dict))
-        print("img len: ", len(image_dict))
-        # Iterate over the timestamps
-        counter = 0
-        
-        # # find the nearest timestamp of images based on pose
-        # for timestamp in sorted(pose_dict.keys()):
-        #     print("pose timestamp: ", timestamp)
-        #     time_key = nearest(image_dict.keys(), timestamp)
-        #     print("img timestamp: ", time_key)
-        #     frame, up = write_image_and_pose(
-        #         image_dict[time_key], pose_dict[timestamp], output_dir, counter, up)
-        #     counter += 1
-        #     out["frames"].append(frame)
-        
+        poses_used = [] # Poses used
         #find the nearest timestamp of pose based on images
         pose_keys_sorted = sorted(pose_dict.keys())
         for timestamp in sorted(image_dict.keys()):
-            if counter % 7 == 0:
-                print("Img timestamp: ", timestamp)
-                curr_pose_time = nearest(pose_dict.keys(), timestamp)
-                print("Pose timestamp: {} difference: {} ms".format(curr_pose_time, abs(curr_pose_time - timestamp) * 1000))
+            # Get current time and pose
+            curr_pose_time = nearest(pose_dict.keys(), timestamp)
+            curr_pose = ros_to_pose_matrix(pose_dict[curr_pose_time])
+            # print("Img timestamp: {} Pos timestamp: {} difference: {} ms".format(timestamp, curr_pose_time, abs(curr_pose_time - timestamp) * 1000))
 
-                # skip if image is very blurry
-                if sharpness(bridge.imgmsg_to_cv2(image_dict[timestamp], "bgr8")) > 900:
-                    # Get the index of the current timestamp in the sorted list of keys
-                    if options.interpolate_linear_poses == True:
-                        index_current = pose_keys_sorted.index(curr_pose_time)
+            # skip if we have close pose
+            if poses_used:
+                R_ItoG_curr = np.array(curr_pose[:3, :3])
+                p_IinG_curr = curr_pose[:3, 3].reshape([3, 1])
+                found_close_pose = False
+                for pose in poses_used:
+                    R_ItoG = np.array(pose[:3, :3])
+                    p_IinG = pose[:3, 3].reshape([3, 1]) #in reality it is p_IinG
+                    o_diff =   np.linalg.norm(log_so3(R_ItoG_curr @ R_ItoG.transpose()),2)
+                    p_diff = np.linalg.norm((p_IinG_curr - p_IinG),2)
+                    if o_diff < options.ori_thr and p_diff < options.pos_thr:
+                        # print("o diff: {} < {}, p diff: {} < {}".format(o_diff, options.ori_thr, p_diff, options.pos_thr))
+                        found_close_pose = True
+                        break
+                if found_close_pose:
+                    pose_rej += 1
+                    continue
 
-                        if index_current == 0 or index_current == len(pose_keys_sorted) - 1:
-                        # closest pose is before the first pose or after the last pose, so skip the image timestamp
-                            continue
-
-                        # curr_pose_time <= image_time_stamp <= next_pose_timestamp
-                        index_pose_next = index_current + 1
-                        next_pose_timestamp = pose_keys_sorted[index_pose_next]
-                        print("Current pose time:{} Next timestamp:{}".format(curr_pose_time, next_pose_timestamp))
-                        
-                        curr_pose = ros_to_pose_matrix(pose_dict[curr_pose_time])
-                        next_pose = ros_to_pose_matrix(pose_dict[next_pose_timestamp])
-
-                        # interpolate if current image time is in between poses
-                        if curr_pose_time <= timestamp <= next_pose_timestamp:
-                            T_inter = pose_interp(timestamp, curr_pose_time, next_pose_timestamp, curr_pose, next_pose)
-                            frame, up = write_image_and_pose(image_dict[timestamp], T_inter, options.out_img_dir, counter, up)
-                        
-                        elif pose_keys_sorted[index_current -1] <= timestamp <= pose_keys_sorted[index_current]:
-                            print("Going back current pose time:{} Using current timestamp:{} difference: {} ms".format(pose_keys_sorted[index_current -1], \
-                                                                                                            pose_keys_sorted[index_current], \
-                                                                                                            abs(pose_keys_sorted[index_current -1] - pose_keys_sorted[index_current]) * 1000))
-                            curr_pose = ros_to_pose_matrix(pose_dict[pose_keys_sorted[index_current -1]])
-                            next_pose = ros_to_pose_matrix(pose_dict[pose_keys_sorted[index_current]])
-                            T_inter = pose_interp(timestamp, pose_keys_sorted[index_current -1], pose_keys_sorted[index_current], curr_pose, next_pose)
-                            frame, up = write_image_and_pose(image_dict[timestamp], T_inter, options.out_img_dir, counter, up)
-
-                        elif pose_keys_sorted[index_current -1] <= timestamp <= next_pose_timestamp:
-                            # get one step back and interpolate (this might be inaccurate)
-                            print("Going back current pose time:{} Next timestamp:{} difference: {} ms".format(pose_keys_sorted[index_current -1], \
-                                                                                                            next_pose_timestamp, \
-                                                                                                            abs(pose_keys_sorted[index_current -1] - next_pose_timestamp) * 1000))
-                            curr_pose = ros_to_pose_matrix(pose_dict[pose_keys_sorted[index_current -1]])
-                            T_inter = pose_interp(timestamp, pose_keys_sorted[index_current -1], next_pose_timestamp, curr_pose, next_pose)
-                            frame, up = write_image_and_pose(image_dict[timestamp], T_inter, options.out_img_dir, counter, up)
-                        
-                        else:
-                            # else use the closest near time
-                            print("Using nearest pose. DID NOT INTERPOLATE")
-                            T_inter = curr_pose
-                            frame, up = write_image_and_pose(image_dict[timestamp], T_inter, options.out_img_dir, counter, up)
-                    
-                    elif options.interpolate_cubic_poses_flag == True:
-                        desired_pose_dict = interpolate_cubic_spline_poses(timestamps_gt, poses_gt)
-                        #print("Cubic interpolation current pose time:{} inter timestamp:{}".format(timestamp, timestamp))
-                        if timestamp in desired_pose_dict:
-                            desired_pose_at_timestamp = desired_pose_dict[timestamp]
-                        else:
-                            timestamps = np.array(list(desired_pose_dict.keys()))
-                            poses = np.array(list(desired_pose_dict.values()))
-                            spline_funcs = [CubicSpline(timestamps, poses[:,i]) for i in range(7)]
-                            desired_pose_at_timestamp = np.zeros(7)
-                            for i, func in enumerate(spline_funcs):
-                                desired_pose_at_timestamp[i] = func(timestamp)
-                            translation = desired_pose_at_timestamp[:3]
-                            quaternion = desired_pose_at_timestamp[3:]
-                            rot = jpl_quat_to_rot_mat(quaternion[0], quaternion[1], quaternion[2], quaternion[3])
-                            #rot = quat2rot(quaternion[0], quaternion[1], quaternion[2], quaternion[3])
-                            desired_pose_matrix = np.concatenate((rot, np.expand_dims(translation, axis=1)), axis=1)
-                            frame, up = write_image_and_pose(image_dict[timestamp], desired_pose_matrix, options.out_img_dir, counter, up)
-                        print("Cubic interpolation nearest pose:{} inter pose:{}\n".format(ros_to_pose_matrix(pose_dict[curr_pose_time]), desired_pose_matrix))
-                        
-                    else:
-                        # Do not interpolate 
-                        print("not interpolating")
-                        curr_pose = ros_to_pose_matrix(pose_dict[curr_pose_time])
-                        frame, up = write_image_and_pose(image_dict[timestamp], curr_pose, options.out_img_dir, counter, up)
-                        compute_poses_to_plot(curr_pose)
-                    options.intrinsic["frames"].append(frame)
-                else:
-                    print("Skipping blurry img")
-            counter += 1
-        
-
-        # if gt_file is None:
-        #     # find the nearest timestamp of images based on pose 
-        #     for timestamp in sorted(pose_dict.keys()):
-        #         print("pose timestamp: ", timestamp)
-        #         time_key = nearest(image_dict.keys(), timestamp)
-        #         print("img timestamp: ", time_key)
-        #         counter += 1
-        #         # if time_key in image_dict:
-        #         #     counter += 1
-        #         #     print(counter)
-        #         frame, up = write_image_and_pose(
-        #             image_dict[time_key], pose_dict[timestamp], output_dir, counter, up)
-        #         out["frames"].append(frame)
-        # else:
-        #     # find the nearest timestamp of pose based on images 
-        #     # Use this for GT poses as they are more frequent than images 
-        #     for timestamp in sorted(image_dict.keys()):
-        #         print("img timestamp: ", timestamp)
-        #         time_key = nearest(pose_dict.keys(), timestamp)
-        #         print("pose timestamp: \n", time_key)
-        #         counter += 1
-        #         # if time_key in image_dict:
-        #         #     counter += 1
-        #         #     print(counter)
-        #         frame, up = write_image_and_pose(
-        #             image_dict[timestamp], pose_dict[time_key], output_dir, counter, up)
-        #         out["frames"].append(frame)
+            frame, up = write_image_and_pose(image_dict[timestamp], curr_pose, options, len(poses_used), up)
+            compute_poses_to_plot(options, curr_pose)
+            options.intrinsic["frames"].append(frame)
+            poses_used.append(curr_pose)
+            pass_cnt += 1
 
     # plot_trajectory()
-    print("done parsing the bag")
+    print("done parsing the bag. totoal {}, sharp rej {}, pose rej {}, pass {}".format(totoal_cnt, sharp_rej, pose_rej, pass_cnt))
     nframes = len(options.intrinsic["frames"])
     up = up / np.linalg.norm(up)
-    print("up vector was", up)
+    # print("up vector was", up)
     # R = rotmat(up, [0, 0, 1])  # rotate up vector to [0,0,1]
     # R = np.pad(R, [0, 1])
     # R[-1, -1] = 1
@@ -552,8 +440,8 @@ def read_bag(options):
             f["transform_matrix"] = f["transform_matrix"].tolist()
 
     #print(nframes, "frames")
-    print(f"writing {options.json_path}")
-    print("Saving JSON")
+    # print(f"writing {options.json_path}")
+    # print("Saving JSON")
     with open(options.json_path, "w") as outfile:
         json.dump(options.intrinsic, outfile, indent=2)
 
@@ -570,6 +458,8 @@ def sharpness(image):
 def get_cam_intrinsic(rosbag_path, intrinsic_topic):
     bag = rosbag.Bag(rosbag_path)
     intrinsic = ""
+    found = False
+    AABB_SCALE = 128
     for topic, msg, t in bag.read_messages(intrinsic_topic):
         w = msg.width
         h = msg.height
@@ -584,7 +474,6 @@ def get_cam_intrinsic(rosbag_path, intrinsic_topic):
         cx = msg.K[2]
         cy = msg.K[5]
         is_fisheye = False # if plumb_bob: false else true?
-        AABB_SCALE = 16
 
         # fl = 0.5 * w / tan(0.5 * angle_x);
         angle_x = math.atan(w / (fl_x * 2)) * 2
@@ -609,9 +498,34 @@ def get_cam_intrinsic(rosbag_path, intrinsic_topic):
             "aabb_scale": AABB_SCALE,
             "frames": [],
         }
+        found = True
         break
     bag.close()
-    return intrinsic
+    if found:
+        return intrinsic
+    else:
+        # This is euroc
+        intrinsic = {
+            "camera_angle_x": 1.3631246603369132,
+            "camera_angle_y": 0.9593372178212194,
+            "fl_x": 463.4830598553089,
+            "fl_y": 461.3701440000305,
+            "k1": -0.27191566105980836,
+            "k2": 0.06426776880177594,
+            "k3": 0,
+            "k4": 0,
+            "p1": 0.0016697300239062935,
+            "p2": -0.0002050480367216984,
+            "is_fisheye": False,
+            "cx": 372.1892110447352,
+            "cy": 240.22233824498292,
+            "w": 752,
+            "h": 480,
+            "aabb_scale": AABB_SCALE,
+            "frames": [],
+        }
+        return intrinsic
+
 
 
 if __name__ == "__main__":
